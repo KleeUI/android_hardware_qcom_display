@@ -48,7 +48,7 @@ cc_binary {
         "libEGL",
         "libGLESv2",
         "libGLESv3",
-        "android.hardware.graphics.composer3-V3-ndk",
+        "android.hardware.graphics.composer3-V4-ndk",
         "android.hardware.graphics.allocator-V2-ndk",
         "libgralloc.qti",
         "libgralloctypes",

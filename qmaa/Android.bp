@@ -1,9 +1,4 @@
-soong_namespace {
-    imports: [
-        "hardware/qcom/display",
-        "hardware/qcom/display/libdebug",
-    ],
-}
+soong_namespace {}
 composer_srcs = ["*.cpp"]
 
 cc_binary {
@@ -51,4 +46,3 @@ cc_binary {
     init_rc: ["vendor.qti.hardware.display.composer-service.rc"],
     vintf_fragments: ["vendor.qti.hardware.display.composer-service.xml"],
 }
-
