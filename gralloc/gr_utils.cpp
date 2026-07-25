@@ -38,6 +38,7 @@
 #include <sys/mman.h>
 #include <cutils/properties.h>
 #include <algorithm>
+#include <inttypes.h>
 #include <string>
 #include <vector>
 
@@ -2370,7 +2371,7 @@ bool getGralloc4Array(MetaData_t *metadata, int64_t paramType) {
 #endif
       return true;
     default:
-      ALOGE("paramType %d not supported", paramType);
+      ALOGE("paramType %" PRId64 " not supported", paramType);
       return false;
   }
 }
@@ -3216,6 +3217,7 @@ Error GetMetaDataInternal(void *buffer, int64_t type, void *in, void **out) {
           break;
         }
       }
+      break;
     }
     case QTI_YUV_PLANE_INFO: {
       if (copy) {
@@ -3261,6 +3263,7 @@ Error GetMetaDataInternal(void *buffer, int64_t type, void *in, void **out) {
           break;
         }
       }
+      break;
     }
     case QTI_CUSTOM_DIMENSIONS_HEIGHT: {
       if (copy) {
@@ -3274,6 +3277,7 @@ Error GetMetaDataInternal(void *buffer, int64_t type, void *in, void **out) {
           break;
         }
       }
+      break;
     }
     case QTI_RGB_DATA_ADDRESS: {
       if (copy) {
@@ -3286,6 +3290,7 @@ Error GetMetaDataInternal(void *buffer, int64_t type, void *in, void **out) {
           break;
         }
       }
+      break;
     }
     case QTI_BUFFER_TYPE:
       if (copy) {
@@ -3356,7 +3361,7 @@ Error GetMetaDataInternal(void *buffer, int64_t type, void *in, void **out) {
       break;
 #endif
     default:
-      ALOGD_IF(DEBUG, "Unsupported metadata type %d", type);
+      ALOGD_IF(DEBUG, "Unsupported metadata type %" PRId64, type);
       ret = Error::BAD_VALUE;
       break;
   }
@@ -3411,7 +3416,7 @@ void setGralloc4Array(MetaData_t *metadata, int64_t paramType, bool isSet) {
     case QTI_MEM_HANDLE:
       break;
     default:
-      ALOGE("paramType %d not supported in Gralloc4", paramType);
+      ALOGE("paramType %" PRId64 " not supported in Gralloc4", paramType);
   }
 }
 
@@ -3446,7 +3451,7 @@ Error SetMetaData(private_handle_t *handle, uint64_t paramType, void *param) {
         break;
 #endif
       default:
-        ALOGE("Unknown paramType %d", paramType);
+        ALOGE("Unknown paramType %" PRIu64, paramType);
         break;
     }
     // param unset
@@ -3574,7 +3579,7 @@ Error SetMetaData(private_handle_t *handle, uint64_t paramType, void *param) {
       data->memHandle = *(reinterpret_cast<int64_t *>(param));
       break;
     default:
-      ALOGE("Unknown paramType %d", paramType);
+      ALOGE("Unknown paramType %" PRIu64, paramType);
       break;
   }
   return Error::NONE;
