@@ -62,7 +62,7 @@ enum VmType {
   kVmTypeMax,
 };
 
-enum VmPermission {
+enum MemBufVmPermission {
   kVmPermissionRead,
   kVmPermissionWrite,
   kVmPermissionExecute,

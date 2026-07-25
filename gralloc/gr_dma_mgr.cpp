@@ -42,6 +42,7 @@
 #include <sys/ioctl.h>
 #include <sys/mman.h>
 
+#include <inttypes.h>
 #include <linux/dma-buf.h>
 #include <stdlib.h>
 #include <fcntl.h>
@@ -398,7 +399,7 @@ int DmaManager::SetBufferPermission(int fd, BufferPermission *buf_perm, int64_t 
   }
   if (!vm_params.empty()) {
     ret = mem_buf_->Export(fd, vm_params, shared, mem_hdl);
-    ALOGI("fd %d mem_hdl %lld ret %d", fd, *mem_hdl, ret);
+    ALOGI("fd %d mem_hdl %" PRId64 " ret %d", fd, *mem_hdl, ret);
   }
   return ret;
 }
