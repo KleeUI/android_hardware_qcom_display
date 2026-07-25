@@ -64,6 +64,7 @@ IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
  */
 
 #include <fcntl.h>
+#include <inttypes.h>
 #include <display/drm/sde_drm.h>
 #include <utils/debug.h>
 #include <utils/sys.h>
@@ -659,7 +660,7 @@ DisplayError HWPeripheralDRM::DozeSuspend(const HWQosData &qos_data, SyncPoints 
 DisplayError HWPeripheralDRM::SetDisplayAttributes(uint32_t index) {
   if (doze_poms_switch_done_ || pending_poms_switch_ || bit_clk_rate_) {
     DLOGW("Bailing. Pending operations: doze_poms_switch_done_=%d, pending_poms_switch_=%d,"
-     "bit_clk_rate_=%d", doze_poms_switch_done_, pending_poms_switch_, bit_clk_rate_);
+     "bit_clk_rate_=%" PRIu64, doze_poms_switch_done_, pending_poms_switch_, bit_clk_rate_);
     return kErrorDeferred;
   }
 
