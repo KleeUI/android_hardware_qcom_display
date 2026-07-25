@@ -63,6 +63,8 @@
 * IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 */
 
+#include <inttypes.h>
+
 #include <string>
 #include <vector>
 
@@ -137,8 +139,8 @@ Return<void> DeviceImpl::registerClient(const hidl_string &client_name,
   device_client->SetDeviceConfigIntf(intf);
 
   std::lock_guard<std::recursive_mutex> lock(death_service_mutex_);
-  ALOGI("Register client id: %lu name: %s device client: %p", client_handle, client_name.c_str(),
-      device_client.get());
+  ALOGI("Register client id: %" PRIu64 " name: %s device client: %p", client_handle,
+        client_name.c_str(), device_client.get());
   display_config_map_.emplace(std::make_pair(client_handle, device_client));
   _hidl_cb(error, client_handle);
   return Void();
@@ -148,7 +150,7 @@ void DeviceImpl::serviceDied(uint64_t client_handle,
                              const android::wp<::android::hidl::base::V1_0::IBase>& callback) {
   std::lock_guard<std::recursive_mutex> lock(death_service_mutex_);
   pending_display_config_.push_back(client_handle);
-    ALOGW("Client id:%lu service died", client_handle);
+  ALOGW("Client id:%" PRIu64 " service died", client_handle);
 }
 
 DeviceImpl::DeviceClientContext::DeviceClientContext(
@@ -903,7 +905,7 @@ Return<void> DeviceImpl::perform(uint64_t client_handle, uint32_t op_code,
         ConfigInterface *pending_intf = pending_client->GetDeviceConfigIntf();
         intf_->UnRegisterClientContext(pending_intf);
         pending_client.reset();
-        ALOGI("clear old client id:%lu ", pending_client_handle);
+        ALOGI("clear old client id:%" PRIu64, pending_client_handle);
       }
       display_config_map_.erase(itr);
     }
