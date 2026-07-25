@@ -22,6 +22,8 @@
 
 #pragma once
 
+#include <inttypes.h>
+
 #include <android/hardware/graphics/mapper/IMapper.h>
 #include <aidl/android/hardware/graphics/allocator/IAllocator.h>
 #include <android/hardware/graphics/mapper/utils/IMapperMetadataTypes.h>
@@ -140,7 +142,8 @@ static bool IsSettable(AIMapper *_Nonnull mapper_, SnapMetadataType type) {
   if (isSettable.find(static_cast<int64_t>(type)) != isSettable.end()) {
     return isSettable.at(static_cast<int64_t>(type));
   } else {
-    ALOGW("%s: Couldn't find provided type %d in list!");
+    ALOGW("%s: Couldn't find provided type %" PRId64 " in list!", __FUNCTION__,
+          static_cast<int64_t>(type));
   }
   return false;
 }
@@ -153,14 +156,14 @@ static AIMapper_Error GetVendorMetadata(AIMapper *_Nonnull mapper_,
 
   if (size_required < 0) {
     ALOGW_IF(-AIMAPPER_ERROR_UNSUPPORTED != size_required,
-             "%s: Unexpected error %d from valid getMetadata (%ld) call", __FUNCTION__,
+             "%s: Unexpected error %d from valid getMetadata (%" PRId64 ") call", __FUNCTION__,
              -size_required, static_cast<int64_t>(type));
     ALOGW("Failed to get Metadata - IS_CACHED");
     return static_cast<AIMapper_Error>(-size_required);
   }
 
   if ((size_t)size_required != dest_size) {
-    ALOGW("getMetadata failed, received %d with buffer size %zd", size_required, dest_size);
+    ALOGW("getMetadata failed, received %d with buffer size %zu", size_required, dest_size);
     return AIMAPPER_ERROR_BAD_VALUE;
   }
   return AIMAPPER_ERROR_NONE;
@@ -177,7 +180,7 @@ auto GetStandardMetadata(AIMapper *_Nonnull mapper_, buffer_handle_t _Nonnull bu
       buf_hnd, static_cast<int64_t>(T), bytestream.data(), bytestream.size());
   if (size_required < 0) {
     ALOGW_IF(-AIMAPPER_ERROR_UNSUPPORTED != size_required,
-             "%s: Unexpected error %d from valid getMetadata (%d) call", __FUNCTION__,
+             "%s: Unexpected error %d from valid getMetadata (%" PRId64 ") call", __FUNCTION__,
              -size_required, static_cast<int64_t>(T));
     return std::nullopt;
   }
@@ -187,8 +190,8 @@ auto GetStandardMetadata(AIMapper *_Nonnull mapper_, buffer_handle_t _Nonnull bu
                                                               bytestream.data(), bytestream.size());
   }
   if (size_required < 0 || (size_t)size_required > bytestream.size()) {
-    ALOGW("getMetadata (%d) failed, received %d with buffer size %zd", static_cast<int64_t>(T),
-          size_required, bytestream.size());
+    ALOGW("getMetadata (%" PRId64 ") failed, received %d with buffer size %zu",
+          static_cast<int64_t>(T), size_required, bytestream.size());
     return std::nullopt;
   }
   return Value::decode(bytestream.data(), size_required);
@@ -203,14 +206,14 @@ AIMapper_Error SetStandardMetadata(AIMapper *_Nonnull mapper_, buffer_handle_t _
   auto size_required = Value::encode(value, nullptr, 0);
   if (size_required < 0) {
     ALOGW_IF(-AIMAPPER_ERROR_UNSUPPORTED != size_required,
-             "%s: Unexpected error %d during size calculation for setMetadata (%d) call",
+             "%s: Unexpected error %d during size calculation for setMetadata (%" PRId64 ") call",
              __FUNCTION__, -size_required, static_cast<int64_t>(T));
     return static_cast<AIMapper_Error>(-size_required);
   }
   bytestream.resize(size_required);
   size_required = Value::encode(value, bytestream.data(), bytestream.size());
   if (size_required < 0 || (size_t)size_required > bytestream.size()) {
-    ALOGW("setMetadata (%d) failed, calculated size %d with buffer size %zd",
+    ALOGW("setMetadata (%" PRId64 ") failed, calculated size %d with buffer size %zu",
           static_cast<int64_t>(T), size_required, bytestream.size());
     return static_cast<AIMapper_Error>(-size_required);
   }
