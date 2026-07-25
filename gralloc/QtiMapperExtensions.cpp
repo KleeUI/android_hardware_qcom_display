@@ -40,6 +40,8 @@
  */
 
 #define ATRACE_TAG (ATRACE_TAG_GRAPHICS | ATRACE_TAG_HAL)
+#include <inttypes.h>
+
 #include "QtiGrallocMetadata.h"
 #include "gr_buf_descriptor.h"
 #include "QtiMapperExtensions.h"
@@ -172,7 +174,7 @@ Return<void> QtiMapperExtensions::getRgbDataAddress(void *buffer, getRgbDataAddr
       }
     }
   }
-  ALOGD_IF(enable_logs_, "RGB data address %d", reinterpret_cast<uint64_t>(rgb_data));
+  ALOGD_IF(enable_logs_, "RGB data address %p", rgb_data);
   hidl_cb(err, rgb_data);
   return Void();
 }
@@ -573,7 +575,8 @@ Return<void> QtiMapperExtensions::getFormatLayout(int32_t format, uint64_t usage
   int plane_count = 0;
   uint32_t size = 0;
 
-  ALOGD_IF(enable_logs_, "%s: input format %d usage %lu width %d height %d interlaced %d",
+  ALOGD_IF(enable_logs_,
+           "%s: input format %d usage %" PRIu64 " width %d height %d interlaced %d",
            __FUNCTION__, format, usage, width, height, flags);
 
   if (snap_helper_->IsSnapAllocEnabled()) {
@@ -584,7 +587,7 @@ Return<void> QtiMapperExtensions::getFormatLayout(int32_t format, uint64_t usage
     if (!snap_helper_->GetFormatLayout(info, &plane_layout_info, &size, flags)) {
       plane_info.resize(plane_layout_info.size());
 
-      ALOGD_IF(enable_logs_, "%s: Number of plane - %d gralloc format %d", __FUNCTION__,
+      ALOGD_IF(enable_logs_, "%s: Number of plane - %zu gralloc format %d", __FUNCTION__,
                plane_layout_info.size(), format);
       for (int i = 0; i < plane_layout_info.size(); i++) {
         plane_info[i].component = plane_layout_info[i].component;
