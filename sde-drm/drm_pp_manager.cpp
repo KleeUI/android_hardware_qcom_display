@@ -69,6 +69,7 @@
 #include <display/drm/msm_drm_pp.h>
 #endif
 #include <errno.h>
+#include <inttypes.h>
 #include <drm_logger.h>
 #include <cstring>
 #include <algorithm>
@@ -317,7 +318,8 @@ int DRMPPManager::SetPPRangeProperty(drmModeAtomicReq *req, uint32_t obj_id,
   value = *((uint64_t *)feature.payload);
   ret = drmModeAtomicAddProperty(req, obj_id, prop_info->prop_id, value);
   if (ret < 0) {
-    DRM_LOGE("failed to add property ret %d id %d value %llu", ret, prop_info->prop_id, value);
+    DRM_LOGE("failed to add property ret %d id %d value %" PRIu64, ret, prop_info->prop_id,
+             value);
   } else {
     ret = 0;
   }
@@ -370,7 +372,7 @@ void DRMPPManager::SetPPEvent(uint32_t obj_id, DRMPPFeatureInfo &feature) {
   struct drm_msm_event_req event_req = {};
 
   if (!feature.payload || feature.payload_size != sizeof(bool)) {
-    DRM_LOGE("Invalid input params: payload %pK payload_size %d exp size %d",
+    DRM_LOGE("Invalid input params: payload %pK payload_size %d exp size %zu",
              feature.payload, feature.payload_size, sizeof(bool));
     return;
   }
