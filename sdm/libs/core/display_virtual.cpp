@@ -144,8 +144,8 @@ DisplayError DisplayVirtual::SetActiveConfig(DisplayConfigVariableInfo *variable
   if (set_max_lum_ != -1.0 || set_min_lum_ != -1.0) {
     hw_panel_info.peak_luminance = set_max_lum_;
     hw_panel_info.blackness_level = set_min_lum_;
-    DLOGI("set peak_luminance %f blackness_level %f for display %d-%d", display_id_,
-          display_type_, hw_panel_info.peak_luminance, hw_panel_info.blackness_level);
+    DLOGI("set peak_luminance %f blackness_level %f for display %d-%u",
+          hw_panel_info.peak_luminance, hw_panel_info.blackness_level, display_id_, display_type_);
   }
 
   error = hw_intf_->GetMixerAttributes(&mixer_attributes);
@@ -223,4 +223,3 @@ DisplayError DisplayVirtual::colorSamplingOff() {
 }
 
 }  // namespace sdm
-
