@@ -45,6 +45,7 @@ namespace composer3 {
   x == 0 ? ndk::ScopedAStatus::ok() : ndk::ScopedAStatus::fromServiceSpecificError(x)
 
 using aidl::android::hardware::common::NativeHandle;
+using aidl::android::hardware::drm::HdcpLevels;
 using aidl::android::hardware::graphics::common::AlphaInterpretation;
 using aidl::android::hardware::graphics::common::Dataspace;
 using aidl::android::hardware::graphics::common::DisplayDecorationSupport;
@@ -78,6 +79,7 @@ using aidl::android::hardware::graphics::composer3::FormatColorComponent;
 using aidl::android::hardware::graphics::composer3::HdrCapabilities;
 using aidl::android::hardware::graphics::composer3::IComposerCallback;
 using aidl::android::hardware::graphics::composer3::LayerBrightness;
+using aidl::android::hardware::graphics::composer3::Luts;
 using aidl::android::hardware::graphics::composer3::OverlayProperties;
 using aidl::android::hardware::graphics::composer3::ParcelableBlendMode;
 using aidl::android::hardware::graphics::composer3::ParcelableComposition;
@@ -171,6 +173,12 @@ class AidlComposerClient : public BnComposerClient {
   ScopedAStatus getDisplayPhysicalOrientation(int64_t in_display, Transform *aidl_return) override;
   ScopedAStatus getHdrCapabilities(int64_t in_display, HdrCapabilities *aidl_return) override;
   ScopedAStatus getMaxVirtualDisplayCount(int32_t *aidl_return) override;
+  ScopedAStatus getMaxLayerPictureProfiles(int64_t in_display,
+                                           int32_t *aidl_return) override;
+  ScopedAStatus startHdcpNegotiation(int64_t in_display,
+                                     const HdcpLevels &in_levels) override;
+  ScopedAStatus getLuts(int64_t in_display, const std::vector<Buffer> &in_buffers,
+                       std::vector<Luts> *aidl_return) override;
   ScopedAStatus getOverlaySupport(OverlayProperties *aidl_return) override;
   ScopedAStatus getPerFrameMetadataKeys(int64_t in_display,
                                         std::vector<PerFrameMetadataKey> *aidl_return) override;

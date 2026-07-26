@@ -1348,7 +1348,7 @@ HWC3::Error HWCSession::SetPowerMode(Display display, int32_t int_mode) {
       // Update hwc state for now. Actual poweron will handled through DisplayConfig.
       hwc_display_[display]->UpdatePowerMode(mode);
     } else {
-      DLOGW("Display %d no longer available.", display);
+      DLOGW("Display %" PRIu64 " no longer available.", display);
       return HWC3::Error::BadDisplay;
     }
   }
@@ -3093,16 +3093,16 @@ bool HWCSession::IsHWDisplayConnected(Display client_id) {
                              [&sdm_id](auto &info) { return sdm_id == info.second.display_id; });
 
   if (itr_hw == hw_displays_info.end()) {
-    DLOGW("client id: %d, sdm_id: %d not found in hw map", client_id, sdm_id);
+    DLOGW("client id: %" PRIu64 ", sdm_id: %d not found in hw map", client_id, sdm_id);
     return false;
   }
 
   if (!itr_hw->second.is_connected) {
-    DLOGW("client_id: %d, sdm_id: %d, not connected", client_id, sdm_id);
+    DLOGW("client_id: %" PRIu64 ", sdm_id: %d, not connected", client_id, sdm_id);
     return false;
   }
 
-  DLOGI("client_id: %d, sdm_id: %d, is connected", client_id, sdm_id);
+  DLOGI("client_id: %" PRIu64 ", sdm_id: %d, is connected", client_id, sdm_id);
   return true;
 }
 
@@ -3549,7 +3549,7 @@ void HWCSession::VmReleaseDone(Display display) {
   SCOPE_LOCK(vm_release_locker_[display]);
   if (clients_waiting_for_vm_release_.test(display)) {
     vm_release_locker_[display].Signal();
-    DLOGI("Signal vm release done!! for display %d", display);
+    DLOGI("Signal vm release done!! for display %" PRIu64, display);
     clients_waiting_for_vm_release_.reset(display);
   }
 }
@@ -4593,7 +4593,7 @@ android::status_t HWCSession::GetDisplayPortId(uint32_t disp_id, int *port_id) {
 
 HWC3::Error HWCSession::TeardownConcurrentWriteback(Display display) {
   if (!hwc_display_[display]) {
-    DLOGW("Invalid display (id = %d) detected as input parameter!", display);
+    DLOGW("Invalid display (id = %" PRIu64 ") detected as input parameter!", display);
   }
 
   for (int id = 0; id < HWCCallbacks::kNumRealDisplays; id++) {

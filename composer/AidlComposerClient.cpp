@@ -468,6 +468,22 @@ ScopedAStatus AidlComposerClient::setRefreshRateChangedCallbackDebugEnabled(int6
   return TO_BINDER_STATUS(INT32(Error::Unsupported));
 }
 
+ScopedAStatus AidlComposerClient::getMaxLayerPictureProfiles(int64_t in_display,
+                                                             int32_t *aidl_return) {
+  return TO_BINDER_STATUS(INT32(Error::Unsupported));
+}
+
+ScopedAStatus AidlComposerClient::startHdcpNegotiation(int64_t in_display,
+                                                       const HdcpLevels &in_levels) {
+  return TO_BINDER_STATUS(INT32(Error::Unsupported));
+}
+
+ScopedAStatus AidlComposerClient::getLuts(int64_t in_display,
+                                         const std::vector<Buffer> &in_buffers,
+                                         std::vector<Luts> *aidl_return) {
+  return TO_BINDER_STATUS(INT32(Error::Unsupported));
+}
+
 ScopedAStatus AidlComposerClient::getPerFrameMetadataKeys(
     int64_t in_display, std::vector<PerFrameMetadataKey> *aidl_return) {
   uint32_t count = 0;

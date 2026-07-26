@@ -1343,7 +1343,7 @@ bool HWCDisplayBuiltIn::NeedsLargeCompPerfHint() {
 
   if (large_comp_hint_threshold_ > 0 && layer_set_.size() >= large_comp_hint_threshold_) {
     DLOGV_IF(kTagResources,
-             "Number of app layers %d meet requirement %d. Set perf hint for large "
+             "Number of app layers %zu meet requirement %u. Set perf hint for large "
              "comp cycle",
              layer_set_.size(), large_comp_hint_threshold_);
     return true;

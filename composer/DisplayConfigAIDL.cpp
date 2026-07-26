@@ -909,7 +909,7 @@ ScopedAStatus DisplayConfigAIDL::setCWBOutputBuffer(
     disp_type = HWC_DISPLAY_EXTERNAL;
   } else if (disp_id == UINT32(DisplayType::BUILTIN2)) {
     dpy_index = hwc_session_->GetDisplayIndex(qdutils::DISPLAY_BUILTIN_2);
-    disp_type = HWC_DISPLAY_BUILTIN_2;
+    disp_type = sdm::HWC_DISPLAY_BUILTIN_2;
   } else {
     ALOGE("%s: CWB is supported on primary or external display only at present.", __FUNCTION__);
     return ScopedAStatus(AStatus_fromExceptionCode(EX_ILLEGAL_ARGUMENT));
