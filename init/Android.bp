@@ -6,5 +6,6 @@ cc_prebuilt_binary {
     },
     device_supported: true,
     srcs: ["init.qti.display_boot.sh"],
+    check_elf_files: false,
     init_rc: ["init.qti.display_boot.rc"],
 }
