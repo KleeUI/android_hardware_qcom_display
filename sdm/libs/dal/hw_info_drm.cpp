@@ -284,8 +284,13 @@ DisplayError HWInfoDRM::GetHWResourceInfo(HWResourceInfo *hw_resource) {
   if (Debug::GetProperty(DISABLE_DESTINATION_SCALER_PROP, &value) == kErrorNone) {
     disable_dest_scalar = (value == 1);
   }
+  value = 0;
+  bool disable_sdm_plugins = false;
+  if (Debug::GetProperty(DISABLE_SDM_PLUGINS_PROP, &value) == kErrorNone) {
+    disable_sdm_plugins = (value == 1);
+  }
   DynLib extension_lib;
-  if (!extension_lib.Open("libsdmextension.so") || disable_dest_scalar) {
+  if (disable_sdm_plugins || !extension_lib.Open("libsdmextension.so") || disable_dest_scalar) {
     hw_resource->hw_dest_scalar_info.count = 0;
   }
 

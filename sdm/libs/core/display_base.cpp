@@ -419,6 +419,13 @@ DisplayError DisplayBase::SetupPanelFeatureFactory() {
     return kErrorNone;
   }
 
+  int disable_sdm_plugins = 0;
+  Debug::Get()->GetProperty(DISABLE_SDM_PLUGINS_PROP, &disable_sdm_plugins);
+  if (disable_sdm_plugins) {
+    DLOGW("SDM panel feature plugins are disabled by %s", DISABLE_SDM_PLUGINS_PROP);
+    return kErrorNone;
+  }
+
   DynLib feature_impl_lib;
   GetPanelFeatureFactory get_factory_f_ptr = nullptr;
   if (feature_impl_lib.Open(EXTENSION_LIBRARY_NAME)) {

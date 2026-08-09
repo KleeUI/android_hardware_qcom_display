@@ -134,6 +134,13 @@ FeatureInterface* GetPostedStartFeatureCheckIntf(HWInterface *intf, PPFeaturesCo
 
 DisplayError ColorManagerProxy::Init(const HWResourceInfo &hw_res_info) {
   DisplayError error = kErrorNone;
+  int disable_sdm_plugins = 0;
+
+  Debug::Get()->GetProperty(DISABLE_SDM_PLUGINS_PROP, &disable_sdm_plugins);
+  if (disable_sdm_plugins) {
+    DLOGW("SDM color plugins are disabled by %s", DISABLE_SDM_PLUGINS_PROP);
+    return kErrorResources;
+  }
 
   // Load color service library and retrieve its entry points.
   if (color_lib_.Open(COLORMGR_LIBRARY_NAME)) {

@@ -70,9 +70,14 @@ CoreImpl::CoreImpl(BufferAllocator *buffer_allocator,
 DisplayError CoreImpl::Init() {
   SCOPE_LOCK(locker_);
   DisplayError error = kErrorNone;
+  int disable_sdm_plugins = 0;
+
+  Debug::Get()->GetProperty(DISABLE_SDM_PLUGINS_PROP, &disable_sdm_plugins);
 
   // Try to load extension library & get handle to its interface.
-  if (extension_lib_.Open(EXTENSION_LIBRARY_NAME)) {
+  if (disable_sdm_plugins) {
+    DLOGW("SDM plugins are disabled by %s", DISABLE_SDM_PLUGINS_PROP);
+  } else if (extension_lib_.Open(EXTENSION_LIBRARY_NAME)) {
     if (!extension_lib_.Sym(CREATE_EXTENSION_INTERFACE_NAME,
                             reinterpret_cast<void **>(&create_extension_intf_)) ||
         !extension_lib_.Sym(DESTROY_EXTENSION_INTERFACE_NAME,
@@ -106,7 +111,9 @@ DisplayError CoreImpl::Init() {
     goto CleanupOnError;
   }
 
-  InitializeSDMUtils();
+  if (extension_intf_) {
+    InitializeSDMUtils();
+  }
 
   error = comp_mgr_.Init(hw_resource_, extension_intf_, buffer_allocator_, socket_handler_);
 

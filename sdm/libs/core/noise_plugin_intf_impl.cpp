@@ -30,6 +30,7 @@
 
 #include "noise_plugin_intf_impl.h"
 #include <private/noise_plugin_dbg.h>
+#include <utils/debug.h>
 
 #define __CLASS__ "NoisePlugInIntfImpl"
 
@@ -110,6 +111,13 @@ NoisePlugInIntfImpl::NoisePlugInIntfImpl() {
 
 int NoisePlugInIntfImpl::Init() {
   lock_guard<mutex> lock(lock_);
+  int disable_sdm_plugins = 0;
+
+  Debug::Get()->GetProperty(DISABLE_SDM_PLUGINS_PROP, &disable_sdm_plugins);
+  if (disable_sdm_plugins) {
+    DLOGW("SDM noise plugins are disabled by %s", DISABLE_SDM_PLUGINS_PROP);
+    return -ENOTSUP;
+  }
 
   enable_ = true;
   attn_ = NOISE_ATTN_DEFAULT;
