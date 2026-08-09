@@ -74,10 +74,11 @@ DisplayError CoreImpl::Init() {
 
   Debug::Get()->GetProperty(DISABLE_SDM_PLUGINS_PROP, &disable_sdm_plugins);
 
-  // Try to load extension library & get handle to its interface.
-  if (disable_sdm_plugins) {
-    DLOGW("SDM plugins are disabled by %s", DISABLE_SDM_PLUGINS_PROP);
-  } else if (extension_lib_.Open(EXTENSION_LIBRARY_NAME)) {
+  // The base extension interface supplies platform resource management and is
+  // required on targets whose hardware cannot use ResourceDefault.  Keep it
+  // available while allowing ABI-sensitive auxiliary factories to be gated
+  // independently below.
+  if (extension_lib_.Open(EXTENSION_LIBRARY_NAME)) {
     if (!extension_lib_.Sym(CREATE_EXTENSION_INTERFACE_NAME,
                             reinterpret_cast<void **>(&create_extension_intf_)) ||
         !extension_lib_.Sym(DESTROY_EXTENSION_INTERFACE_NAME,
@@ -111,7 +112,9 @@ DisplayError CoreImpl::Init() {
     goto CleanupOnError;
   }
 
-  if (extension_intf_) {
+  if (extension_intf_ && disable_sdm_plugins) {
+    DLOGW("Optional SDM plugin utilities are disabled by %s", DISABLE_SDM_PLUGINS_PROP);
+  } else if (extension_intf_) {
     InitializeSDMUtils();
   }
 
