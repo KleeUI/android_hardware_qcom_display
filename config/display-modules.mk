@@ -1,7 +1,12 @@
 DISPLAY_MODULES_HARDWARE:= vendor.qti.hardware.display.composer-service \
                         android.hardware.graphics.mapper@4.0-impl-qti-display \
-                        vendor.qti.hardware.display.mapper@4.0.vendor \
-                        vendor.qti.hardware.display.allocator-service
+                        vendor.qti.hardware.display.mapper@4.0.vendor
+
+ifeq ($(TARGET_QTI_GRALLOC4_COMPAT),true)
+    DISPLAY_MODULES_HARDWARE += vendor.qti.hardware.display.allocator-service-legacy
+else
+    DISPLAY_MODULES_HARDWARE += vendor.qti.hardware.display.allocator-service
+endif
 
 ifeq ($(TARGET_BUILD_VARIANT),userdebug)
     DISPLAY_MODULES_HARDWARE += libcomposertestservice
@@ -26,13 +31,16 @@ ifneq ($(TARGET_IS_HEADLESS),true)
                             libqdutils \
                             libqdMetaData \
                             libgralloc.qti \
-                            mapper.qti \
                             libmapperutils \
                             vendor.display.config@2.0.vendor \
                             init.qti.display_boot.sh \
                             libfilefinder \
                             vendor.qti.hardware.display.demura-service \
                             modetest \
-                            libdisplayconfig.qti \
-                            vendor.qti.hardware.display.snapalloc-impl
+                            libdisplayconfig.qti
+
+    ifneq ($(TARGET_QTI_GRALLOC4_COMPAT),true)
+        DISPLAY_MODULES_HARDWARE += mapper.qti \
+                                vendor.qti.hardware.display.snapalloc-impl
+    endif
 endif
