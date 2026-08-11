@@ -15,6 +15,7 @@
 #include <mutex>
 #include <cutils/properties.h>
 #include <utils/debug.h>
+#include "display_properties.h"
 #include "gr_utils.h"
 #include "android/binder_auto_utils.h"
 #include "gralloctypes/Gralloc4.h"
@@ -93,6 +94,15 @@ GrallocSnapHelper::GrallocSnapHelper() {
   if (!(strncmp(property, "1", PROPERTY_VALUE_MAX)) ||
       !(strncmp(property, "true", PROPERTY_VALUE_MAX))) {
     snap_alloc_enable_ = true;
+  }
+
+  // SnapAlloc allocates directly through libdmabufheap. The legacy gralloc
+  // backend uses ION unless the DMA-BUF backend is explicitly selected; mixing
+  // the two produces buffers that KGSL cannot import. Keep SnapAlloc opt-in
+  // for devices that have selected the matching backend.
+  if (snap_alloc_enable_ && !property_get_bool(USE_DMA_BUF_HEAPS_PROP, 0)) {
+    ALOGW("SnapAlloc disabled: legacy gralloc backend is active");
+    snap_alloc_enable_ = false;
   }
 
   enable_logs_ = property_get_bool(ENABLE_LOGS_PROP, 0);
@@ -3073,6 +3083,13 @@ GrallocSnapHelperLegacy::GrallocSnapHelperLegacy() {
   if (!(strncmp(property, "1", PROPERTY_VALUE_MAX)) ||
       !(strncmp(property, "true", PROPERTY_VALUE_MAX))) {
     snap_alloc_enable_ = true;
+  }
+
+  // Keep the mapper4 compatibility path subject to the same allocator
+  // backend contract as the mapper5 path above.
+  if (snap_alloc_enable_ && !property_get_bool(USE_DMA_BUF_HEAPS_PROP, 0)) {
+    ALOGW("SnapAlloc legacy path disabled: legacy gralloc backend is active");
+    snap_alloc_enable_ = false;
   }
 
   if (!snap_alloc_enable_) {
