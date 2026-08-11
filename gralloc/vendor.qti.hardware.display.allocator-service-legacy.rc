@@ -3,4 +3,6 @@ service vendor.qti.hardware.display.allocator /vendor/bin/hw/vendor.qti.hardware
     user system
     group graphics drmrpc
     capabilities SYS_NICE
+    interface android.hardware.graphics.allocator@4.0::IAllocator default
+    interface vendor.qti.hardware.display.allocator@4.0::IQtiAllocator default
     onrestart restart surfaceflinger
