@@ -102,7 +102,14 @@ DisplayError Strategy::Start(DispLayerStack *disp_layer_stack, uint32_t *max_att
   disp_layer_stack_ = disp_layer_stack;
   extn_start_success_ = false;
 
-  if (strategy_intf_) {
+  if (!strategy_intf_) {
+    // The built-in GPU strategy still needs a full validation pass. Reporting
+    // success here makes DisplayBuiltIn::Prepare() take its skip-validate path,
+    // leaving DisplayBase::needs_validate_ set and causing every subsequent
+    // commit to fail with kErrorNotValidated.
+    *max_attempts = 1;
+    error = kErrorNeedsValidate;
+  } else {
     error = strategy_intf_->Start(disp_layer_stack_, max_attempts, constraints);
     if (error == kErrorNone || error == kErrorNeedsValidate || error == kErrorNeedsLutRegen) {
       extn_start_success_ = true;
