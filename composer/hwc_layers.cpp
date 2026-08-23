@@ -26,6 +26,7 @@
 
 #include "hwc_layers.h"
 #include "hwc_debugger.h"
+#include <fcntl.h>
 #include <utils/debug.h>
 #include <stdint.h>
 #include <utility>
@@ -319,14 +320,11 @@ DisplayError ColorMetadataToDataspace(ColorMetaData color_metadata, Dataspace *d
 }
 
 static bool IsSdrDimmingDisabled() {
-  static bool read_prop = false;
-  static bool disable_sdr_dimming = false;
-  if (!read_prop) {
+  static const bool disable_sdr_dimming = []() {
     int value = 0;
     HWCDebugHandler::Get()->GetProperty(DISABLE_SDR_DIMMING, &value);
-    disable_sdr_dimming = (value == 1);
-  }
-  read_prop = true;
+    return value == 1;
+  }();
   return disable_sdr_dimming;
 }
 
@@ -365,24 +363,64 @@ HWC3::Error HWCLayer::SetLayerBuffer(buffer_handle_t buffer, shared_ptr<Fence> a
 
   const native_handle_t *handle = reinterpret_cast<const native_handle_t *>(buffer);
   void *hnd = const_cast<native_handle_t *>(handle);
-  int fd;
-  buffer_allocator_->GetMetadataValue(hnd, SnapMetadataType::FD, &fd, sizeof(fd));
-
-  if (fd < 0) {
+  int fd = -1;
+  if (buffer_allocator_->GetFd(hnd, fd) != kErrorNone || fd < 0) {
+    DLOGW("Failed to retrieve a valid buffer fd for layer: %d", UINT32(id_));
     return HWC3::Error::BadParameter;
   }
 
-  LayerBuffer *layer_buffer = &layer_->input_buffer;
-  int aligned_width, aligned_height;
-  buffer_allocator_->GetCustomWidthAndHeight(reinterpret_cast<const native_handle_t *>(buffer),
-                                             &aligned_width, &aligned_height);
-  int fmt, flag;
-  buffer_allocator_->GetMetadataValue(hnd, SnapMetadataType::PIXEL_FORMAT_ALLOCATED, &fmt,
-                                      sizeof(fmt));
-  buffer_allocator_->GetPrivateFlags(hnd, flag);
-  LayerBufferFormat format = GetSDMFormat(fmt, flag);
+  int aligned_width = 0;
+  int aligned_height = 0;
+  if (buffer_allocator_->GetCustomWidthAndHeight(handle, &aligned_width, &aligned_height) !=
+          kErrorNone ||
+      aligned_width <= 0 || aligned_height <= 0) {
+    DLOGW("Failed to retrieve valid aligned dimensions for layer: %d", UINT32(id_));
+    return HWC3::Error::BadParameter;
+  }
 
-if ((format != layer_buffer->format) || (UINT32(aligned_width) != layer_buffer->width) ||
+  int32_t fmt = 0;
+  int32_t flag = 0;
+  if (buffer_allocator_->GetFormat(hnd, fmt) != kErrorNone ||
+      buffer_allocator_->GetPrivateFlags(hnd, flag) != kErrorNone) {
+    DLOGW("Failed to retrieve format or flags for layer: %d", UINT32(id_));
+    return HWC3::Error::BadParameter;
+  }
+
+  LayerBufferFormat format = GetSDMFormat(fmt, flag);
+  if (format == kFormatInvalid) {
+    DLOGW("Unsupported format %d for layer: %d", fmt, UINT32(id_));
+    return HWC3::Error::BadParameter;
+  }
+
+  uint32_t unaligned_width = 0;
+  uint32_t unaligned_height = 0;
+  uint32_t buffer_type = 0;
+  uint32_t stride = 0;
+  uint32_t allocation_size = 0;
+  uint64_t handle_id = 0;
+  uint64_t usage = 0;
+  if (buffer_allocator_->GetUnalignedWidth(hnd, unaligned_width) != kErrorNone ||
+      buffer_allocator_->GetUnalignedHeight(hnd, unaligned_height) != kErrorNone ||
+      buffer_allocator_->GetBufferType(hnd, buffer_type) != kErrorNone ||
+      buffer_allocator_->GetWidth(hnd, stride) != kErrorNone ||
+      buffer_allocator_->GetAllocationSize(hnd, allocation_size) != kErrorNone ||
+      buffer_allocator_->GetBufferId(hnd, handle_id) != kErrorNone ||
+      buffer_allocator_->GetMetadataValue(hnd, SnapMetadataType::USAGE, &usage, sizeof(usage)) !=
+          0 ||
+      unaligned_width == 0 || unaligned_height == 0 || stride == 0 || allocation_size == 0) {
+    DLOGW("Failed to retrieve required metadata for layer: %d", UINT32(id_));
+    return HWC3::Error::BadParameter;
+  }
+
+  int new_buffer_fd = ::fcntl(fd, F_DUPFD_CLOEXEC, 0);
+  if (new_buffer_fd < 0) {
+    DLOGE("Failed to duplicate buffer fd for layer: %d", UINT32(id_));
+    return HWC3::Error::NoResources;
+  }
+
+  LayerBuffer *layer_buffer = &layer_->input_buffer;
+
+  if ((format != layer_buffer->format) || (UINT32(aligned_width) != layer_buffer->width) ||
       (UINT32(aligned_height) != layer_buffer->height)) {
     // Layer buffer geometry has changed.
     geometry_changes_ |= kBufferGeometry;
@@ -391,28 +429,11 @@ if ((format != layer_buffer->format) || (UINT32(aligned_width) != layer_buffer->
   layer_buffer->format = format;
   layer_buffer->width = UINT32(aligned_width);
   layer_buffer->height = UINT32(aligned_height);
-
-  uint64_t tmp_width, tmp_height;
-  auto err = buffer_allocator_->GetMetadataValue(hnd, SnapMetadataType::WIDTH, &tmp_width,
-                                                 sizeof(tmp_width));
-  if (err) {
-    DLOGE("Failed to retrieve unaligned width");
-  } else {
-    layer_buffer->unaligned_width = tmp_width;
-  }
-  err = buffer_allocator_->GetMetadataValue(hnd, SnapMetadataType::HEIGHT, &tmp_height,
-                                            sizeof(tmp_height));
-  if (err) {
-    DLOGE("Failed to retrieve unaligned height");
-  } else {
-    layer_buffer->unaligned_height = tmp_height;
-  }
-  uint32_t buffer_type;
-  buffer_allocator_->GetMetadataValue(hnd, SnapMetadataType::BUFFER_TYPE, &buffer_type,
-                                      sizeof(buffer_type));
-
+  layer_buffer->unaligned_width = unaligned_width;
+  layer_buffer->unaligned_height = unaligned_height;
   layer_buffer->flags.video = (buffer_type == BUFFER_TYPE_VIDEO) ? true : false;
   if (SetMetaData(handle, layer_) != kErrorNone) {
+    ::close(new_buffer_fd);
     return HWC3::Error::BadLayer;
   }
 
@@ -433,39 +454,19 @@ if ((format != layer_buffer->format) || (UINT32(aligned_width) != layer_buffer->
   layer_buffer->acquire_fence = acquire_fence;
 
   int buffer_fd = buffer_fd_;
-  buffer_fd_ = ::dup(fd);
+  buffer_fd_ = new_buffer_fd;
   if (buffer_fd >= 0) {
     ::close(buffer_fd);
   }
 
   layer_buffer->planes[0].fd = buffer_fd_;
   layer_buffer->planes[0].offset = 0;
-  err = buffer_allocator_->GetMetadataValue(hnd, SnapMetadataType::STRIDE,
-                                            &layer_buffer->planes[0].stride,
-                                            sizeof(layer_buffer->planes[0].stride));
-  if (err) {
-    DLOGW("Failed to retrieve aligned width");
-  }
-
-  err = buffer_allocator_->GetMetadataValue(hnd, SnapMetadataType::ALLOCATION_SIZE,
-                                            &layer_buffer->size, sizeof(layer_buffer->size));
-
-  if (err) {
-    DLOGW("Failed to retrieve allocation size");
-  }
+  layer_buffer->planes[0].stride = stride;
+  layer_buffer->size = allocation_size;
   buffer_flipped_ = reinterpret_cast<uint64_t>(handle) != layer_buffer->buffer_id;
   layer_buffer->buffer_id = reinterpret_cast<uint64_t>(handle);
-  int64_t hd_id, hd_usage;
-  err = buffer_allocator_->GetMetadataValue(
-      hnd, SnapMetadataType::BUFFER_ID, &layer_buffer->handle_id, sizeof(layer_buffer->handle_id));
-  if (err) {
-    DLOGW("Failed to retrieve buffer id");
-  }
-  err = buffer_allocator_->GetMetadataValue(hnd, SnapMetadataType::USAGE, &layer_buffer->usage,
-                                            sizeof(layer_buffer->usage));
-  if (err) {
-    DLOGW("Failed to retrieve handle usage");
-  }
+  layer_buffer->handle_id = handle_id;
+  layer_buffer->usage = usage;
   return HWC3::Error::None;
 }
 
@@ -1199,23 +1200,13 @@ DisplayError HWCLayer::SetMetaData(const native_handle_t *pvt_handle, Layer *lay
 
   layer_buffer->timestamp_data.valid = false;
 
-  bool timestamp_set = false;
-  mapper::GetMetadataState(static_cast<buffer_handle_t>(handle),
-                           SnapMetadataType::VIDEO_TS_INFO, &timestamp_set);
-  if (timestamp_set) {
-    VideoTimestampInfo timestamp_info = {};
-    auto mapper = GetMapperInstance();
-    if (!mapper) {
-      return kErrorResources;
-    }
-    auto err = STABLEMAPPER(mapper).getMetadata(
-        static_cast<buffer_handle_t>(handle), VENDOR_QTI_METADATA(SnapMetadataType::VIDEO_TS_INFO),
-        &timestamp_info, sizeof(timestamp_info));
-    if (err >= 0 && timestamp_info.enable) {
-      layer_buffer->timestamp_data.valid = true;
-      layer_buffer->timestamp_data.frame_number = timestamp_info.frame_number;
-      layer_buffer->timestamp_data.frame_timestamp_us = timestamp_info.frame_timestamp_us;
-    }
+  VideoTimestampInfo timestamp_info = {};
+  if (!buffer_allocator_->GetMetadataValue(handle, SnapMetadataType::VIDEO_TS_INFO, &timestamp_info,
+                                           sizeof(timestamp_info)) &&
+      timestamp_info.enable) {
+    layer_buffer->timestamp_data.valid = true;
+    layer_buffer->timestamp_data.frame_number = timestamp_info.frame_number;
+    layer_buffer->timestamp_data.frame_timestamp_us = timestamp_info.frame_timestamp_us;
   }
 
   return kErrorNone;

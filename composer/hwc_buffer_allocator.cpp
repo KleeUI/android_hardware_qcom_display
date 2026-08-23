@@ -41,6 +41,8 @@
 #include <QtiGralloc.h>
 
 #include <gralloctypes/Gralloc4.h>
+#include <limits>
+#include <utility>
 #include <core/buffer_allocator.h>
 #include <utils/constants.h>
 #include <utils/debug.h>
@@ -73,37 +75,79 @@ using ABufferUsage = aidl::android::hardware::graphics::common::BufferUsage;
 
 namespace sdm {
 
-int HWCBufferAllocator::GetGrallocInstance() {
-  // Lazy initialization of gralloc HALs
-  if (mapper_ != nullptr && allocator_ != nullptr && snap_helper_ != nullptr) {
+int HWCBufferAllocator::InitializeMapper() {
+  if (mapper_initialized_.load(std::memory_order_acquire)) {
     return kErrorNone;
   }
 
-  if (allocator_ == nullptr) {
-    allocator_ = IAllocator::fromBinder(ndk::SpAIBinder(
-        AServiceManager_checkService("android.hardware.graphics.allocator.IAllocator/default")));
-    if (allocator_ == nullptr) {
-      DLOGE("Unable to get allocator");
-      return kErrorCriticalResource;
-    }
+  std::lock_guard<std::mutex> lock(mapper_init_mutex_);
+  if (mapper_initialized_.load(std::memory_order_relaxed)) {
+    return kErrorNone;
   }
 
-  if (mapper_ == nullptr) {
-    mapper_ = GetMapperInstance();
-    if (mapper_ == nullptr) {
-      DLOGE("Unable to get mapper");
-      return kErrorCriticalResource;
-    }
+  AIMapper *mapper = GetMapperInstance();
+  if (mapper == nullptr) {
+    DLOGE("Unable to get mapper");
+    return kErrorCriticalResource;
   }
 
-  if (snap_helper_ == nullptr) {
-    snap_helper_ = gralloc::GrallocSnapHelper::GetInstance();
-    if (snap_helper_ == nullptr) {
-      DLOGW("Unable to get snap helper");
-    }
+  mapper_ = mapper;
+  mapper_initialized_.store(true, std::memory_order_release);
+  return kErrorNone;
+}
+
+int HWCBufferAllocator::InitializeSnapHelper() {
+  if (snap_helper_initialized_.load(std::memory_order_acquire)) {
+    return kErrorNone;
   }
 
-  return 0;
+  std::lock_guard<std::mutex> lock(snap_helper_init_mutex_);
+  if (snap_helper_initialized_.load(std::memory_order_relaxed)) {
+    return kErrorNone;
+  }
+
+  auto *snap_helper = gralloc::GrallocSnapHelper::GetInstance();
+  if (snap_helper == nullptr) {
+    DLOGE("Unable to get snap helper");
+    return kErrorCriticalResource;
+  }
+
+  snap_helper_ = snap_helper;
+  snap_helper_initialized_.store(true, std::memory_order_release);
+  return kErrorNone;
+}
+
+int HWCBufferAllocator::InitializeAllocator() {
+  if (allocator_initialized_.load(std::memory_order_acquire)) {
+    return kErrorNone;
+  }
+
+  std::lock_guard<std::mutex> lock(allocator_init_mutex_);
+  if (allocator_initialized_.load(std::memory_order_relaxed)) {
+    return kErrorNone;
+  }
+
+  auto allocator = IAllocator::fromBinder(ndk::SpAIBinder(
+      AServiceManager_waitForService("android.hardware.graphics.allocator.IAllocator/default")));
+  if (allocator == nullptr) {
+    DLOGE("Unable to get allocator");
+    return kErrorCriticalResource;
+  }
+
+  allocator_ = std::move(allocator);
+  allocator_initialized_.store(true, std::memory_order_release);
+  return kErrorNone;
+}
+
+int HWCBufferAllocator::GetGrallocInstance() {
+  // Allocation needs both services. Metadata-only paths initialize the mapper
+  // independently so a late allocator service cannot leave mapper_ null.
+  int err = InitializeMapper();
+  if (err != kErrorNone) {
+    return err;
+  }
+
+  return InitializeAllocator();
 }
 
 static BufferDescriptorInfo CreateDescriptor(std::string name, uint32_t width, uint32_t height,
@@ -121,6 +165,10 @@ static BufferDescriptorInfo CreateDescriptor(std::string name, uint32_t width, u
 }
 
 int HWCBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) {
+  if (!buffer_info) {
+    return kErrorParameters;
+  }
+
   auto err = GetGrallocInstance();
   if (err != 0) {
     return err;
@@ -195,11 +243,15 @@ int HWCBufferAllocator::AllocateBuffer(BufferInfo *buffer_info) {
 
   AllocationResult result;
   auto status = allocator_->allocate2(descriptor_info, 1, &result);
-  if (!status.isOk()) {
+  if (!status.isOk() || result.buffers.size() != 1) {
     DLOGE("Failed to allocate buffer");
     return kErrorMemory;
   }
   native_handle *raw_handle = android::makeFromAidl(result.buffers[0]);
+  if (!raw_handle) {
+    DLOGE("Failed to convert allocated buffer handle");
+    return kErrorMemory;
+  }
 
   auto mapper_err = STABLEMAPPER(mapper_).importBuffer(raw_handle, &buf);
 
@@ -272,9 +324,19 @@ cleanup:
 }
 
 int HWCBufferAllocator::FreeBuffer(BufferInfo *buffer_info) {
-  int err = 0;
+  if (!buffer_info || !buffer_info->private_data) {
+    return kErrorParameters;
+  }
+
+  int err = InitializeMapper();
+  if (err != kErrorNone) {
+    return err;
+  }
+
   auto hnd = reinterpret_cast<buffer_handle_t>(buffer_info->private_data);
-  STABLEMAPPER(mapper_).freeBuffer(hnd);
+  if (STABLEMAPPER(mapper_).freeBuffer(hnd) != AIMAPPER_ERROR_NONE) {
+    return kErrorParameters;
+  }
 
   AllocatedBufferInfo &alloc_buffer_info = buffer_info->alloc_buffer_info;
 
@@ -282,16 +344,24 @@ int HWCBufferAllocator::FreeBuffer(BufferInfo *buffer_info) {
   alloc_buffer_info.stride = 0;
   alloc_buffer_info.size = 0;
   buffer_info->private_data = NULL;
-  return err;
+  return kErrorNone;
 }
 
 int HWCBufferAllocator::GetHeight(void *buf, uint32_t &height) {
-  uint32_t tmp_height;
-  auto err = STABLEMAPPER(mapper_).getMetadata(
-      static_cast<buffer_handle_t>(buf),
-      VENDOR_QTI_METADATA(SnapMetadataType::ALIGNED_HEIGHT_IN_PIXELS), &tmp_height,
-      sizeof(tmp_height));
-  if (err >= 0) {
+  height = 0;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int init_err = InitializeMapper();
+  if (init_err != kErrorNone) {
+    return init_err;
+  }
+
+  uint32_t tmp_height = 0;
+  auto err = GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf),
+                               SnapMetadataType::ALIGNED_HEIGHT_IN_PIXELS, &tmp_height,
+                               sizeof(tmp_height));
+  if (err == AIMAPPER_ERROR_NONE) {
     height = tmp_height;
     return kErrorNone;
   }
@@ -299,10 +369,20 @@ int HWCBufferAllocator::GetHeight(void *buf, uint32_t &height) {
 }
 
 int HWCBufferAllocator::GetWidth(void *buf, uint32_t &width) {
+  width = 0;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int err = InitializeMapper();
+  if (err != kErrorNone) {
+    return err;
+  }
+
   auto result =
       GetStandardMetadata<StandardMetadataType::STRIDE>(mapper_, static_cast<buffer_handle_t>(buf));
 
-  if (result.has_value()) {
+  if (result.has_value() &&
+      static_cast<uint64_t>(*result) <= std::numeric_limits<uint32_t>::max()) {
     width = static_cast<uint32_t>(*result);
     return kErrorNone;
   }
@@ -310,10 +390,20 @@ int HWCBufferAllocator::GetWidth(void *buf, uint32_t &width) {
 }
 
 int HWCBufferAllocator::GetUnalignedHeight(void *buf, uint32_t &height) {
+  height = 0;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int err = InitializeMapper();
+  if (err != kErrorNone) {
+    return err;
+  }
+
   auto result =
       GetStandardMetadata<StandardMetadataType::HEIGHT>(mapper_, static_cast<buffer_handle_t>(buf));
 
-  if (result.has_value()) {
+  if (result.has_value() &&
+      static_cast<uint64_t>(*result) <= std::numeric_limits<uint32_t>::max()) {
     height = static_cast<uint32_t>(*result);
     return kErrorNone;
   }
@@ -321,10 +411,20 @@ int HWCBufferAllocator::GetUnalignedHeight(void *buf, uint32_t &height) {
 }
 
 int HWCBufferAllocator::GetUnalignedWidth(void *buf, uint32_t &width) {
+  width = 0;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int err = InitializeMapper();
+  if (err != kErrorNone) {
+    return err;
+  }
+
   auto result =
       GetStandardMetadata<StandardMetadataType::WIDTH>(mapper_, static_cast<buffer_handle_t>(buf));
 
-  if (result.has_value()) {
+  if (result.has_value() &&
+      static_cast<uint64_t>(*result) <= std::numeric_limits<uint32_t>::max()) {
     width = static_cast<uint32_t>(*result);
     return kErrorNone;
   }
@@ -332,11 +432,19 @@ int HWCBufferAllocator::GetUnalignedWidth(void *buf, uint32_t &width) {
 }
 
 int HWCBufferAllocator::GetFd(void *buf, int &fd) {
-  int tmp_fd;
-  auto err = STABLEMAPPER(mapper_).getMetadata(static_cast<buffer_handle_t>(buf),
-                                               VENDOR_QTI_METADATA(SnapMetadataType::FD), &tmp_fd,
-                                               sizeof(tmp_fd));
-  if (err >= 0) {
+  fd = -1;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int init_err = InitializeMapper();
+  if (init_err != kErrorNone) {
+    return init_err;
+  }
+
+  int tmp_fd = -1;
+  auto err = GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf), SnapMetadataType::FD,
+                               &tmp_fd, sizeof(tmp_fd));
+  if (err == AIMAPPER_ERROR_NONE) {
     fd = tmp_fd;
     return kErrorNone;
   }
@@ -344,10 +452,20 @@ int HWCBufferAllocator::GetFd(void *buf, int &fd) {
 }
 
 int HWCBufferAllocator::GetAllocationSize(void *buf, uint32_t &alloc_size) {
+  alloc_size = 0;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int err = InitializeMapper();
+  if (err != kErrorNone) {
+    return err;
+  }
+
   auto result = GetStandardMetadata<StandardMetadataType::ALLOCATION_SIZE>(
       mapper_, static_cast<buffer_handle_t>(buf));
 
-  if (result.has_value()) {
+  if (result.has_value() &&
+      static_cast<uint64_t>(*result) <= std::numeric_limits<uint32_t>::max()) {
     alloc_size = static_cast<uint32_t>(*result);
     return kErrorNone;
   }
@@ -355,18 +473,36 @@ int HWCBufferAllocator::GetAllocationSize(void *buf, uint32_t &alloc_size) {
 }
 
 int HWCBufferAllocator::GetBufferId(void *buf, uint64_t &id) {
+  id = 0;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int init_err = InitializeMapper();
+  if (init_err != kErrorNone) {
+    return init_err;
+  }
+
   auto result = GetStandardMetadata<StandardMetadataType::BUFFER_ID>(
       mapper_, static_cast<buffer_handle_t>(buf));
 
   if (result.has_value()) {
-    id = static_cast<uint32_t>(*result);
+    id = static_cast<uint64_t>(*result);
     return kErrorNone;
   }
   return kErrorParameters;
 }
 
 int HWCBufferAllocator::GetFormat(void *buf, int32_t &format) {
-  int32_t ret_format;
+  format = 0;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int init_err = InitializeMapper();
+  if (init_err != kErrorNone) {
+    return init_err;
+  }
+
+  int32_t ret_format = 0;
   int err =
       GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf),
                         SnapMetadataType::PIXEL_FORMAT_ALLOCATED, &ret_format, sizeof(ret_format));
@@ -380,21 +516,25 @@ int HWCBufferAllocator::GetFormat(void *buf, int32_t &format) {
 
 int HWCBufferAllocator::GetPrivateFlags(void *buf, int32_t &flags) {
   flags = 0;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int init_err = InitializeMapper();
+  if (init_err != kErrorNone) {
+    return init_err;
+  }
+
   int64_t is_ubwc = 0, is_tile_rendered = 0, is_cached = 0;
-  auto err = STABLEMAPPER(mapper_).getMetadata(static_cast<buffer_handle_t>(buf),
-                                               VENDOR_QTI_METADATA(SnapMetadataType::IS_UBWC),
-                                               &is_ubwc, sizeof(is_ubwc));
-  err |= STABLEMAPPER(mapper_).getMetadata(static_cast<buffer_handle_t>(buf),
-                                           VENDOR_QTI_METADATA(SnapMetadataType::IS_TILE_RENDERED),
-                                           &is_tile_rendered, sizeof(is_tile_rendered));
-  err |= STABLEMAPPER(mapper_).getMetadata(static_cast<buffer_handle_t>(buf),
-                                           VENDOR_QTI_METADATA(SnapMetadataType::IS_CACHED),
-                                           &is_cached, sizeof(is_cached));
-  uint64_t buffer_usage;
-  err |= STABLEMAPPER(mapper_).getMetadata(static_cast<buffer_handle_t>(buf),
-                                           VENDOR_QTI_METADATA(SnapMetadataType::USAGE),
-                                           &buffer_usage, sizeof(buffer_usage));
-  if (err >= 0) {
+  uint64_t buffer_usage = 0;
+  if (GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf), SnapMetadataType::IS_UBWC,
+                        &is_ubwc, sizeof(is_ubwc)) == AIMAPPER_ERROR_NONE &&
+      GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf),
+                        SnapMetadataType::IS_TILE_RENDERED, &is_tile_rendered,
+                        sizeof(is_tile_rendered)) == AIMAPPER_ERROR_NONE &&
+      GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf), SnapMetadataType::IS_CACHED,
+                        &is_cached, sizeof(is_cached)) == AIMAPPER_ERROR_NONE &&
+      GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf), SnapMetadataType::USAGE,
+                        &buffer_usage, sizeof(buffer_usage)) == AIMAPPER_ERROR_NONE) {
     // Private flags are being set here until pending changes to use snapalloc in SDM directly
     flags = is_ubwc ? (flags | qtigralloc::PRIV_FLAGS_UBWC_ALIGNED) : flags;
     flags = is_tile_rendered ? (flags | qtigralloc::PRIV_FLAGS_TILE_RENDERED) : flags;
@@ -417,7 +557,8 @@ int HWCBufferAllocator::GetPrivateFlags(void *buf, int32_t &flags) {
 }
 
 int HWCBufferAllocator::GetSDMFormat(void *buf, LayerBufferFormat &sdm_format) {
-  int32_t tmp_format, tmp_flags, err;
+  sdm_format = kFormatInvalid;
+  int32_t tmp_format = 0, tmp_flags = 0, err;
   err = GetFormat(buf, tmp_format);
   if (err != kErrorNone)
     return kErrorUndefined;
@@ -431,11 +572,20 @@ int HWCBufferAllocator::GetSDMFormat(void *buf, LayerBufferFormat &sdm_format) {
 }
 
 int HWCBufferAllocator::GetBufferType(void *buf, uint32_t &buffer_type) {
-  int32_t tmp_buffer_type;
-  auto err = STABLEMAPPER(mapper_).getMetadata(static_cast<buffer_handle_t>(buf),
-                                               VENDOR_QTI_METADATA(SnapMetadataType::BUFFER_TYPE),
-                                               &tmp_buffer_type, sizeof(tmp_buffer_type));
-  if (err >= 0) {
+  buffer_type = 0;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int init_err = InitializeMapper();
+  if (init_err != kErrorNone) {
+    return init_err;
+  }
+
+  uint32_t tmp_buffer_type = 0;
+  auto err =
+      GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf), SnapMetadataType::BUFFER_TYPE,
+                        &tmp_buffer_type, sizeof(tmp_buffer_type));
+  if (err == AIMAPPER_ERROR_NONE) {
     buffer_type = tmp_buffer_type;
     return kErrorNone;
   }
@@ -443,10 +593,21 @@ int HWCBufferAllocator::GetBufferType(void *buf, uint32_t &buffer_type) {
 }
 
 int HWCBufferAllocator::GetBufferGeometry(void *buf, int32_t &slice_width, int32_t &slice_height) {
+  slice_width = 0;
+  slice_height = 0;
+  if (!buf) {
+    return kErrorParameters;
+  }
+  int init_err = InitializeMapper();
+  if (init_err != kErrorNone) {
+    return init_err;
+  }
+
   auto result =
       GetStandardMetadata<StandardMetadataType::CROP>(mapper_, static_cast<buffer_handle_t>(buf));
 
-  if (result.has_value()) {
+  if (result.has_value() && !result->empty() && result.value()[0].right > 0 &&
+      result.value()[0].bottom > 0) {
     slice_width = result.value()[0].right;
     slice_height = result.value()[0].bottom;
     return kErrorNone;
@@ -456,36 +617,53 @@ int HWCBufferAllocator::GetBufferGeometry(void *buf, int32_t &slice_width, int32
 
 int HWCBufferAllocator::GetCustomWidthAndHeight(const native_handle_t *handle, int *width,
                                                 int *height) {
-  void *hnd = const_cast<native_handle_t *>(handle);
+  if (!handle || !width || !height) {
+    return -EINVAL;
+  }
 
-  GetMetadataValue(hnd, SnapMetadataType::STRIDE, width, sizeof(*width));
-  GetMetadataValue(hnd, SnapMetadataType::ALIGNED_HEIGHT_IN_PIXELS, height, sizeof(*height));
-
-  auto err = GetGrallocInstance();
-  if (err != 0) {
-    DLOGE("Failed to retrieve gralloc instance");
+  *width = 0;
+  *height = 0;
+  auto err = InitializeMapper();
+  if (err != kErrorNone) {
     return err;
   }
-  int ret;
-  if (handle != nullptr) {
-    if (snap_helper_->IsSnapAllocEnabled()) {
-      ret = GetMetadataValue(const_cast<native_handle_t *>(handle),
-                             SnapMetadataType::CUSTOM_DIMENSIONS_STRIDE, width, sizeof(*width));
+  err = InitializeSnapHelper();
+  if (err != kErrorNone) {
+    return err;
+  }
 
-      if (ret == 0) {
-        ret = GetMetadataValue(const_cast<native_handle_t *>(handle),
-                               SnapMetadataType::CUSTOM_DIMENSIONS_HEIGHT, height, sizeof(*height));
-      }
-    } else {
-      ret = gralloc::GetCustomDimensions(static_cast<private_handle_t *>(hnd), width, height);
+  void *hnd = const_cast<native_handle_t *>(handle);
+  if (GetMetadataValue(hnd, SnapMetadataType::STRIDE, width, sizeof(*width)) != 0 ||
+      GetMetadataValue(hnd, SnapMetadataType::ALIGNED_HEIGHT_IN_PIXELS, height, sizeof(*height)) !=
+          0) {
+    return -EINVAL;
+  }
+
+  int ret = 0;
+  if (snap_helper_->IsSnapAllocEnabled()) {
+    int custom_width = 0;
+    int custom_height = 0;
+    if (GetMetadataValue(hnd, SnapMetadataType::CUSTOM_DIMENSIONS_STRIDE, &custom_width,
+                         sizeof(custom_width)) == 0 &&
+        GetMetadataValue(hnd, SnapMetadataType::CUSTOM_DIMENSIONS_HEIGHT, &custom_height,
+                         sizeof(custom_height)) == 0) {
+      *width = custom_width;
+      *height = custom_height;
     }
-    if (ret) {
-      ALOGW(
-          "%s: Error obtaining custom dimensions. "
-          "stride: %d, height: %d",
-          __FUNCTION__, *width, *height);
+  } else {
+    auto private_handle = static_cast<private_handle_t *>(hnd);
+    if (private_handle_t::validate(private_handle) != 0) {
       return -EINVAL;
     }
+    ret = gralloc::GetCustomDimensions(private_handle, width, height);
+  }
+
+  if (ret || *width <= 0 || *height <= 0) {
+    ALOGW(
+        "%s: Error obtaining custom dimensions. "
+        "stride: %d, height: %d",
+        __FUNCTION__, *width, *height);
+    return -EINVAL;
   }
 
   return kErrorNone;
@@ -506,9 +684,9 @@ int HWCBufferAllocator::GetAlignedWidthAndHeight(int width, int height, int form
   *aligned_height = height;
 
   int err;
-  err = GetGrallocInstance();
+  err = InitializeSnapHelper();
   if (err != 0) {
-    DLOGE("Failed to retrieve gralloc instance");
+    DLOGE("Failed to retrieve snap helper");
     return err;
   }
   if (snap_helper_->IsSnapAllocEnabled()) {
@@ -545,9 +723,9 @@ int HWCBufferAllocator::GetAlignedWidthAndHeight(int width, int height, int form
 
 uint32_t HWCBufferAllocator::GetBufferSize(BufferInfo *buffer_info) {
   int err;
-  err = GetGrallocInstance();
+  err = InitializeSnapHelper();
   if (err != 0) {
-    DLOGE("Failed to retrieve gralloc instance");
+    DLOGE("Failed to retrieve snap helper");
     return 0;
   }
 
@@ -774,9 +952,9 @@ int HWCBufferAllocator::GetAllocatedBufferInfo(const BufferConfig &buffer_config
 int HWCBufferAllocator::GetBufferLayout(const AllocatedBufferInfo &buf_info, uint32_t stride[4],
                                         uint32_t offset[4], uint32_t *num_planes) {
   int err;
-  err = GetGrallocInstance();
+  err = InitializeSnapHelper();
   if (err != 0) {
-    DLOGE("Failed to retrieve gralloc instance");
+    DLOGE("Failed to retrieve snap helper");
     return err;
   }
 
@@ -879,21 +1057,25 @@ int HWCBufferAllocator::GetBufferLayout(const AllocatedBufferInfo &buf_info, uin
 
 int HWCBufferAllocator::MapBuffer(const native_handle_t *handle, shared_ptr<Fence> acquire_fence,
                                   void **base_ptr) {
-  auto err = GetGrallocInstance();
+  if (!handle || !base_ptr) {
+    return kErrorParameters;
+  }
+
+  *base_ptr = nullptr;
+  auto err = InitializeMapper();
   if (err != 0) {
-    DLOGW("Could not get gralloc instance");
+    DLOGW("Could not get mapper instance");
     return err;
   }
 
   Fence::ScopedRef scoped_ref;
   NATIVE_HANDLE_DECLARE_STORAGE(acquire_fence_storage, 1, 0);
-  int acquire_fence_fd = 0;
+  int acquire_fence_fd = -1;
   if (acquire_fence) {
     acquire_fence_fd = scoped_ref.Get(acquire_fence);
   }
 
   auto hnd = static_cast<buffer_handle_t>(const_cast<native_handle_t *>(handle));
-  *base_ptr = NULL;
   ARect access_region = {.left = 0, .top = 0, .right = 0, .bottom = 0};
   auto error = STABLEMAPPER(mapper_).lock(hnd, (uint64_t)ABufferUsage::CPU_READ_OFTEN,
                                           access_region, acquire_fence_fd, base_ptr);
@@ -907,8 +1089,17 @@ int HWCBufferAllocator::MapBuffer(const native_handle_t *handle, shared_ptr<Fenc
 }
 
 int HWCBufferAllocator::UnmapBuffer(const native_handle_t *handle, int *release_fence) {
+  if (!handle || !release_fence) {
+    return kErrorParameters;
+  }
+
   int err = kErrorNone;
   *release_fence = -1;
+  err = InitializeMapper();
+  if (err != kErrorNone) {
+    return err;
+  }
+
   auto hnd = static_cast<buffer_handle_t>(const_cast<native_handle_t *>(handle));
   auto error = STABLEMAPPER(mapper_).unlock(hnd, release_fence);
 
@@ -928,38 +1119,33 @@ void HWCBufferAllocator::SetBufferAccessControlInfo(std::bitset<kBufferPermMax> 
 }
 
 int HWCBufferAllocator::GetCustomContentMetadata(void *buf, CustomContentMetadata *dest) {
-  int err;
-  err = GetGrallocInstance();
-  if (err != 0) {
-    DLOGE("Failed to retrieve gralloc instance");
+  if (!buf || !dest) {
+    return -EINVAL;
+  }
+
+  *dest = {};
+  int err = InitializeMapper();
+  if (err != kErrorNone) {
+    DLOGE("Failed to retrieve mapper instance");
     return err;
   }
 
-  if (!buf || !dest) {
-    err = -EINVAL;
-  } else {
-    auto error = STABLEMAPPER(mapper_).getMetadata(
-        static_cast<buffer_handle_t>(buf),
-        VENDOR_QTI_METADATA(SnapMetadataType::CUSTOM_CONTENT_METADATA), static_cast<void *>(dest),
-        sizeof(*dest));
-    if (error < 0) {
-      err = -ENOTSUP;
-    }
-  }
-
-  return err;
+  auto error = GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf),
+                                 SnapMetadataType::CUSTOM_CONTENT_METADATA,
+                                 static_cast<void *>(dest), sizeof(*dest));
+  return error == AIMAPPER_ERROR_NONE ? 0 : -ENOTSUP;
 }
 
 int HWCBufferAllocator::GetMetadataValue(void *buf, SnapMetadataType type, void *dest,
                                          size_t dest_size) {
-  int err = GetGrallocInstance();
-  if (err != 0) {
-    DLOGE("Failed to retrieve gralloc instance");
-    return err;
+  if (!buf || !dest || dest_size == 0) {
+    return -EINVAL;
   }
 
-  if (!buf || !dest) {
-    return -EINVAL;
+  int err = InitializeMapper();
+  if (err != kErrorNone) {
+    DLOGE("Failed to retrieve mapper instance");
+    return err;
   }
 
   if (IsSettable(mapper_, type) && mapper::IsMetadataStateSupported()) {
@@ -979,6 +1165,11 @@ int HWCBufferAllocator::GetMetadataValue(void *buf, SnapMetadataType type, void 
 int HWCBufferAllocator::ImportBufferHandle(native_handle_t **handle, bool is_aidl_duped) {
   if (!handle || !(*handle)) {
     return -EINVAL;
+  }
+
+  int err = InitializeMapper();
+  if (err != kErrorNone) {
+    return err;
   }
 
   buffer_handle_t buf = nullptr;
@@ -1001,6 +1192,11 @@ int HWCBufferAllocator::ImportBufferHandle(native_handle_t **handle, bool is_aid
 
 void HWCBufferAllocator::ReleaseBufferHandle(const native_handle_t *handle) {
   if (!handle) {
+    return;
+  }
+
+  if (InitializeMapper() != kErrorNone) {
+    DLOGE("Failed to retrieve mapper instance");
     return;
   }
 

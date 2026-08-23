@@ -76,78 +76,8 @@ BufferDescriptorInfo ConvertGrallocToAidlDescriptor(const gralloc::BufferDescrip
 AIMapper_Error GetFromBufferDescriptor(BufferDescriptorInfo aidl_desc,
                                        SnapMetadataType metadata_type, void *_Nonnull out,
                                        bool convert_to_hidl_bytestream);
-
-static AIMapper *_Nullable GetMapperInstance() {
-  static AIMapper *mapper = nullptr;
-  if (mapper) {
-    ALOGI("Using previously loaded IMapper library.");
-    return mapper;
-  }
-
-  // Obtain QTI IMapper library name
-  std::string suffix = "qti";
-  auto allocator_ =
-      aidl::android::hardware::graphics::allocator::IAllocator::fromBinder(ndk::SpAIBinder(
-          AServiceManager_checkService("android.hardware.graphics.allocator.IAllocator/default")));
-  if (allocator_ == nullptr) {
-    ALOGW("Unable to get allocator, using previously known IMapper library suffix 'qti'");
-  } else {
-    allocator_->getIMapperLibrarySuffix(&suffix);
-  }
-  std::string lib_name = "mapper." + suffix + ".so";
-
-  void *so = android_load_sphal_library(lib_name.c_str(), RTLD_LOCAL | RTLD_NOW);
-  if (!so) {
-    ALOGE("Failed to load %s", lib_name.c_str());
-    return nullptr;
-  }
-
-  auto loadIMapper = (AIMapper_loadIMapperFn)dlsym(so, "AIMapper_loadIMapper");
-  AIMapper_Error error = loadIMapper(&mapper);
-  if (error != AIMAPPER_ERROR_NONE) {
-    ALOGE("AIMapper_loadIMapper failed %d", error);
-    return nullptr;
-  }
-  auto mapper_version = (int32_t *)dlsym(so, "ANDROID_HAL_MAPPER_VERSION");
-  // IMapper version check
-  // When upgrading to a new stable version, update STABLEMAPPER macro above to point to correct
-  // struct version
-  if (mapper_version &&
-      (*mapper_version != AIMAPPER_VERSION_5 || *mapper_version != (int32_t)mapper->version)) {
-    ALOGE("IMapper version %d not equal to last known stable version %d, aborting IMapper init.",
-          *mapper_version, AIMAPPER_VERSION_5);
-    return nullptr;
-  }
-  return mapper;
-}
-
-static bool IsSettable(AIMapper *_Nonnull mapper_, SnapMetadataType type) {
-  static const AIMapper_MetadataTypeDescription *descriptions = nullptr;
-  std::unordered_map<int64_t, bool> supported_settable;
-
-  // Skip if list has already been fetched once since it's an immutable list in mapper
-  if (descriptions == nullptr) {
-    size_t description_count = 0;
-    STABLEMAPPER(mapper_).listSupportedMetadataTypes(&descriptions, &description_count);
-
-    for (int i = 0; i < static_cast<int>(description_count); i++) {
-      supported_settable.insert(
-          {std::move(static_cast<int64_t>(descriptions[i].metadataType.value)),
-           std::move(descriptions[i].isSettable)});
-    }
-  }
-
-  static std::unordered_map<int64_t, bool> isSettable{supported_settable.begin(),
-                                                      supported_settable.end()};
-
-  if (isSettable.find(static_cast<int64_t>(type)) != isSettable.end()) {
-    return isSettable.at(static_cast<int64_t>(type));
-  } else {
-    ALOGW("%s: Couldn't find provided type %" PRId64 " in list!", __FUNCTION__,
-          static_cast<int64_t>(type));
-  }
-  return false;
-}
+AIMapper *_Nullable GetMapperInstance();
+bool IsSettable(AIMapper *_Nonnull mapper_, SnapMetadataType type);
 
 static AIMapper_Error GetVendorMetadata(AIMapper *_Nonnull mapper_,
                                         buffer_handle_t _Nonnull buf_hnd, SnapMetadataType type,

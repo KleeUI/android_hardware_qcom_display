@@ -45,6 +45,9 @@
 #include <sys/mman.h>
 #include <QtiGrallocMetadata.h>
 
+#include <atomic>
+#include <mutex>
+
 #include <aidl/android/hardware/graphics/allocator/AllocationError.h>
 #include <aidl/android/hardware/graphics/allocator/AllocationResult.h>
 #include <aidl/android/hardware/graphics/allocator/IAllocator.h>
@@ -100,10 +103,19 @@ class HWCBufferAllocator : public BufferAllocator {
   void ReleaseBufferHandle(const native_handle_t *handle);
 
  private:
+  int InitializeMapper();
+  int InitializeSnapHelper();
+  int InitializeAllocator();
   int GetGrallocInstance();
   void SetBufferAccessControlInfo(std::bitset<kBufferPermMax> perm, BufferPermission *buf_perm);
-  AIMapper *mapper_;
-  std::shared_ptr<IAllocator> allocator_;
+  std::mutex mapper_init_mutex_;
+  std::mutex snap_helper_init_mutex_;
+  std::mutex allocator_init_mutex_;
+  std::atomic<bool> mapper_initialized_ = false;
+  std::atomic<bool> snap_helper_initialized_ = false;
+  std::atomic<bool> allocator_initialized_ = false;
+  AIMapper *mapper_ = nullptr;
+  std::shared_ptr<IAllocator> allocator_ = nullptr;
   gralloc::GrallocSnapHelper *snap_helper_ = nullptr;
 };
 
