@@ -38,14 +38,34 @@ AIMapper_Error LazyInit() {
   return AIMAPPER_ERROR_NONE;
 }
 
+bool IsMetadataStateSupported() {
+  return LazyInit() == AIMAPPER_ERROR_NONE && snap_helper_->IsSnapAllocEnabled();
+}
+
 AIMapper_Error GetMetadataState(buffer_handle_t buffer_handle, SnapMetadataType metadata_type,
                                 bool *out) {
-  AIMapper_Error error = LazyInit();
-  if (error == AIMAPPER_ERROR_NONE) {
-    return (static_cast<AIMapper_Error>(snap_helper_->GetMetadataState(
-        const_cast<native_handle_t *>(buffer_handle), metadata_type, out)));
+  if (!buffer_handle) {
+    return AIMAPPER_ERROR_BAD_BUFFER;
   }
-  return error;
+  if (!out) {
+    return AIMAPPER_ERROR_BAD_VALUE;
+  }
+
+  AIMapper_Error error = LazyInit();
+  if (error != AIMAPPER_ERROR_NONE) {
+    return error;
+  }
+
+  if (!snap_helper_->IsSnapAllocEnabled()) {
+    // Legacy MetaData_t getters validate their own set bits. Let callers probe
+    // the real getter instead of treating the missing Snap state backend as if
+    // every optional metadata item were absent.
+    *out = true;
+    return AIMAPPER_ERROR_NONE;
+  }
+
+  return static_cast<AIMapper_Error>(snap_helper_->GetMetadataState(
+      const_cast<native_handle_t *>(buffer_handle), metadata_type, out));
 }
 
 gralloc::BufferDescriptor ConvertAidlToGrallocDescriptor(const BufferDescriptorInfo &info) {

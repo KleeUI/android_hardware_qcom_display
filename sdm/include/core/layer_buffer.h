@@ -241,16 +241,16 @@ struct LayerBufferFlags {
 };
 
 struct LayerHistData {
-  bool stats_valid; /* bool indicating if the following histogram is valid */
+  bool stats_valid = false; /* bool indicating if the following histogram is valid */
   std::vector<uint32_t> stats_info; /* video histogram stats payload */
-  uint32_t display_width;       /* video display_width */
-  uint32_t display_height;      /* video display_height */
+  uint32_t display_width = 0;       /* video display_width */
+  uint32_t display_height = 0;      /* video display_height */
 };
 
 struct LayerTimestamp {
-  uint32_t valid; /* Below fields are valid only if this boolean is set to true */
-  uint32_t frame_number; /* Frame position of the content contained in the layer buffer */
-  uint64_t frame_timestamp_us; /* Content timestamp of the frame contained in the layer buffer */
+  uint32_t valid = 0; /* Below fields are valid only if this boolean is set to true */
+  uint32_t frame_number = 0; /* Frame position of the content contained in the layer buffer */
+  uint64_t frame_timestamp_us = 0; /* Content timestamp of the frame contained in the layer buffer */
 };
 
 /*! @brief This structure defines a layer buffer handle which contains raw buffer and its associated

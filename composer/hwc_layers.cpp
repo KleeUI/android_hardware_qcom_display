@@ -1127,56 +1127,81 @@ DisplayError HWCLayer::SetMetaData(const native_handle_t *pvt_handle, Layer *lay
   // Handle colorMetaData / Dataspace handling now
   ValidateAndSetCSC(static_cast<native_handle_t *>(handle));
 
-  bool extended_md_set = false;
-  mapper::GetMetadataState(static_cast<buffer_handle_t>(handle),
-                           SnapMetadataType::CUSTOM_CONTENT_METADATA, &extended_md_set);
-  if (extended_md_set) {
+  bool should_probe_extended_md = false;
+  const auto state_error = mapper::GetMetadataState(
+      static_cast<buffer_handle_t>(handle), SnapMetadataType::CUSTOM_CONTENT_METADATA,
+      &should_probe_extended_md);
+  should_probe_extended_md =
+      state_error == AIMAPPER_ERROR_NONE && should_probe_extended_md;
+
+  bool extended_md_available = false;
+  if (should_probe_extended_md) {
     std::shared_ptr<CustomContentMetadata> dv_md = std::make_shared<CustomContentMetadata>();
     int err = buffer_allocator_->GetCustomContentMetadata(handle, dv_md.get());
 
-    if (!err) {
+    if (!err && dv_md->size > 0 && dv_md->size <= CUSTOM_METADATA_SIZE_BYTES) {
+      extended_md_available = true;
       if (!layer_buffer->extended_content_metadata ||
           dv_md->size != layer_buffer->extended_content_metadata->size ||
           !SameConfig(layer_buffer->extended_content_metadata->metadataPayload,
-                      dv_md->metadataPayload, dv_md->size)) {
+                      dv_md->metadataPayload, static_cast<uint32_t>(dv_md->size))) {
         layer_buffer->extended_content_metadata = dv_md;
         layer_->update_mask.set(kContentMetadata);
       }
     }
-  } else if (layer_buffer->extended_content_metadata) {
+  }
+
+  if (!extended_md_available && layer_buffer->extended_content_metadata) {
     // Buffer switch scenario - cleanup old metadata
     layer_buffer->extended_content_metadata = nullptr;
     layer_->update_mask.set(kContentMetadata);
   }
 
+  const bool old_histogram_available =
+      layer_buffer->hist_data.stats_valid || !layer_buffer->hist_data.stats_info.empty();
+  bool histogram_available = false;
   if (!ignore_sdr_histogram_md_ ||
       IsHdr(layer_buffer->color_metadata.colorPrimaries, layer_buffer->color_metadata.transfer)) {
     VideoHistogramMetadata histogram = {};
-    if (layer_->update_mask.test(kContentMetadata) == false &&
-        !buffer_allocator_->GetMetadataValue(static_cast<native_handle_t *>(handle),
+    if (!buffer_allocator_->GetMetadataValue(static_cast<native_handle_t *>(handle),
                                              SnapMetadataType::VIDEO_HISTOGRAM_STATS, &histogram,
                                              sizeof(histogram))) {
       uint32_t bins = histogram.stat_len / sizeof(histogram.stats_info[0]);
-      layer_buffer->hist_data.display_width = layer_buffer->unaligned_width;
-      layer_buffer->hist_data.display_height = layer_buffer->unaligned_height;
-      if (histogram.stat_len <= sizeof(histogram.stats_info) && bins > 0) {
-        layer_buffer->hist_data.stats_info.clear();
-        layer_buffer->hist_data.stats_info.reserve(bins);
-        for (uint32_t i = 0; i < bins; i++) {
-          layer_buffer->hist_data.stats_info.push_back(histogram.stats_info[i]);
-        }
+      if (histogram.stat_len <= sizeof(histogram.stats_info) &&
+          histogram.stat_len % sizeof(histogram.stats_info[0]) == 0 && bins > 0) {
+        const std::vector<uint32_t> new_stats(histogram.stats_info,
+                                              histogram.stats_info + bins);
+        const bool histogram_changed =
+            !layer_buffer->hist_data.stats_valid ||
+            layer_buffer->hist_data.display_width != layer_buffer->unaligned_width ||
+            layer_buffer->hist_data.display_height != layer_buffer->unaligned_height ||
+            layer_buffer->hist_data.stats_info != new_stats;
 
+        layer_buffer->hist_data.display_width = layer_buffer->unaligned_width;
+        layer_buffer->hist_data.display_height = layer_buffer->unaligned_height;
+        layer_buffer->hist_data.stats_info = new_stats;
         layer_buffer->hist_data.stats_valid = true;
-        layer_->update_mask.set(kContentMetadata);
+        histogram_available = true;
+        if (histogram_changed) {
+          layer_->update_mask.set(kContentMetadata);
+        }
       }
     }
+  }
+
+  if (!histogram_available && old_histogram_available) {
+    layer_buffer->hist_data.stats_valid = false;
+    layer_buffer->hist_data.stats_info.clear();
+    layer_buffer->hist_data.display_width = 0;
+    layer_buffer->hist_data.display_height = 0;
+    layer_->update_mask.set(kContentMetadata);
   }
 
   layer_buffer->timestamp_data.valid = false;
 
   bool timestamp_set = false;
-  mapper::GetMetadataState(static_cast<buffer_handle_t>(handle), SnapMetadataType::VIDEO_TS_INFO,
-                           &timestamp_set);
+  mapper::GetMetadataState(static_cast<buffer_handle_t>(handle),
+                           SnapMetadataType::VIDEO_TS_INFO, &timestamp_set);
   if (timestamp_set) {
     VideoTimestampInfo timestamp_info = {};
     auto mapper = GetMapperInstance();

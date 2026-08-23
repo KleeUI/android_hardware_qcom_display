@@ -70,6 +70,7 @@ static bool isVendorMetadata(AIMapper_MetadataType metadataType) {
 
 AIMapper_Error GetMetadataState(buffer_handle_t _Nonnull buffer_handle,
                                 SnapMetadataType metadata_type, bool *_Nonnull out);
+bool IsMetadataStateSupported();
 gralloc::BufferDescriptor ConvertAidlToGrallocDescriptor(const BufferDescriptorInfo &info);
 BufferDescriptorInfo ConvertGrallocToAidlDescriptor(const gralloc::BufferDescriptor &info);
 AIMapper_Error GetFromBufferDescriptor(BufferDescriptorInfo aidl_desc,
@@ -155,11 +156,11 @@ static AIMapper_Error GetVendorMetadata(AIMapper *_Nonnull mapper_,
       STABLEMAPPER(mapper_).getMetadata(buf_hnd, VENDOR_QTI_METADATA(type), dest, dest_size);
 
   if (size_required < 0) {
-    ALOGW_IF(-AIMAPPER_ERROR_UNSUPPORTED != size_required,
-             "%s: Unexpected error %d from valid getMetadata (%" PRId64 ") call", __FUNCTION__,
-             -size_required, static_cast<int64_t>(type));
-    ALOGW("Failed to get Metadata - IS_CACHED");
-    return static_cast<AIMapper_Error>(-size_required);
+    const auto error = static_cast<AIMapper_Error>(-size_required);
+    ALOGW_IF(error != AIMAPPER_ERROR_UNSUPPORTED,
+             "%s: getMetadata (%" PRId64 ") failed: %d", __FUNCTION__,
+             static_cast<int64_t>(type), error);
+    return error;
   }
 
   if ((size_t)size_required != dest_size) {

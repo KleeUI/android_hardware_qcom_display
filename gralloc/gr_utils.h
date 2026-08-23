@@ -270,6 +270,7 @@ int ValidateAndMap(private_handle_t *handle);
 Error GetColorSpaceFromColorMetaData(ColorMetaData color_metadata, uint32_t *color_space);
 Error GetMetaDataByReference(void *buffer, int64_t type, void **out);
 Error GetMetaDataValue(void *buffer, int64_t type, void *in);
+bool getGralloc4Array(MetaData_t *metadata, int64_t paramType);
 Error GetMetaDataInternal(void *buffer, int64_t type, void *in, void **out);
 Error ColorMetadataToDataspace(ColorMetaData color_metadata,
                                aidl::android::hardware::graphics::common::Dataspace *dataspace);

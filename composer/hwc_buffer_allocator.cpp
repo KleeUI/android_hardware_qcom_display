@@ -379,6 +379,7 @@ int HWCBufferAllocator::GetFormat(void *buf, int32_t &format) {
 }
 
 int HWCBufferAllocator::GetPrivateFlags(void *buf, int32_t &flags) {
+  flags = 0;
   int64_t is_ubwc = 0, is_tile_rendered = 0, is_cached = 0;
   auto err = STABLEMAPPER(mapper_).getMetadata(static_cast<buffer_handle_t>(buf),
                                                VENDOR_QTI_METADATA(SnapMetadataType::IS_UBWC),
@@ -951,32 +952,28 @@ int HWCBufferAllocator::GetCustomContentMetadata(void *buf, CustomContentMetadat
 
 int HWCBufferAllocator::GetMetadataValue(void *buf, SnapMetadataType type, void *dest,
                                          size_t dest_size) {
-  int err;
-  err = GetGrallocInstance();
+  int err = GetGrallocInstance();
   if (err != 0) {
     DLOGE("Failed to retrieve gralloc instance");
     return err;
   }
 
   if (!buf || !dest) {
-    err = -EINVAL;
-  } else {
-    bool metadata_set = true;
-    AIMapper_Error error = AIMAPPER_ERROR_NONE;
+    return -EINVAL;
+  }
 
-    if (IsSettable(mapper_, type)) {
-      error = GetMetadataState(static_cast<buffer_handle_t>(buf), type, &metadata_set);
-    }
-    if (metadata_set) {
-      error = GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf), type, dest, dest_size);
-    }
-
-    if (error != AIMAPPER_ERROR_NONE || !metadata_set) {
-      err = -ENOTSUP;
+  if (IsSettable(mapper_, type) && mapper::IsMetadataStateSupported()) {
+    bool metadata_set = false;
+    const AIMapper_Error state_error =
+        GetMetadataState(static_cast<buffer_handle_t>(buf), type, &metadata_set);
+    if (state_error != AIMAPPER_ERROR_NONE || !metadata_set) {
+      return -ENOTSUP;
     }
   }
 
-  return err;
+  const AIMapper_Error error =
+      GetVendorMetadata(mapper_, static_cast<buffer_handle_t>(buf), type, dest, dest_size);
+  return error == AIMAPPER_ERROR_NONE ? 0 : -ENOTSUP;
 }
 
 int HWCBufferAllocator::ImportBufferHandle(native_handle_t **handle, bool is_aidl_duped) {

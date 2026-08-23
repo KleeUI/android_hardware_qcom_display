@@ -675,6 +675,166 @@ int32_t QtiMapper5Legacy::GetMetadataPrivate(buffer_handle_t _Nonnull bufferHand
     return -AIMAPPER_ERROR_NO_RESOURCES;
   }
   auto hnd = QTI_HANDLE_CONST(bufferHandle);
+
+  // AIMapper vendor metadata is transported as the native value, while the
+  // gralloc4 IMapper API transports an encoded byte stream. Re-encoding the
+  // legacy value here makes the returned size differ from the fixed size
+  // advertised by AIMapper (for example, a 4-byte FD becomes 23 bytes).
+  // Bridge only metadata whose legacy layout is known to match. Passing an
+  // arbitrary Snap metadata identifier to GetMetadataValue() is unsafe: some
+  // legacy identifiers expect constructed C++ objects instead of raw storage.
+  if (!isStandard) {
+    if (buf_mgr_->IsBufferImported(hnd) != gralloc::Error::NONE) {
+      return -AIMAPPER_ERROR_BAD_BUFFER;
+    }
+
+    auto copy_value = [outData, outDataSize](const void *value, size_t value_size) -> int32_t {
+      if (outData == nullptr || outDataSize < value_size) {
+        return static_cast<int32_t>(value_size);
+      }
+      memcpy(outData, value, value_size);
+      return static_cast<int32_t>(value_size);
+    };
+
+    // Allocation metadata is immutable and available directly on the imported
+    // private handle. This also covers Snap-only types which have no legacy QTI
+    // metadata identifier.
+    switch (static_cast<SnapMetadataType>(metadataType)) {
+      case SnapMetadataType::BUFFER_ID: {
+        const uint64_t id = hnd->id;
+        return copy_value(&id, sizeof(id));
+      }
+      case SnapMetadataType::WIDTH: {
+        const uint64_t width = hnd->unaligned_width;
+        return copy_value(&width, sizeof(width));
+      }
+      case SnapMetadataType::HEIGHT: {
+        const uint64_t height = hnd->unaligned_height;
+        return copy_value(&height, sizeof(height));
+      }
+      case SnapMetadataType::USAGE: {
+        const uint64_t usage = hnd->usage;
+        return copy_value(&usage, sizeof(usage));
+      }
+      case SnapMetadataType::ALLOCATION_SIZE: {
+        const uint32_t allocation_size = static_cast<uint32_t>(hnd->size);
+        return copy_value(&allocation_size, sizeof(allocation_size));
+      }
+      case SnapMetadataType::FD: {
+        const int32_t fd = hnd->fd;
+        return copy_value(&fd, sizeof(fd));
+      }
+      case SnapMetadataType::STRIDE:
+      case SnapMetadataType::ALIGNED_WIDTH_IN_PIXELS: {
+        const uint32_t width = hnd->width;
+        return copy_value(&width, sizeof(width));
+      }
+      case SnapMetadataType::ALIGNED_HEIGHT_IN_PIXELS: {
+        const uint32_t height = hnd->height;
+        return copy_value(&height, sizeof(height));
+      }
+      case SnapMetadataType::BUFFER_TYPE: {
+        const uint32_t buffer_type = hnd->buffer_type;
+        return copy_value(&buffer_type, sizeof(buffer_type));
+      }
+      case SnapMetadataType::PIXEL_FORMAT_ALLOCATED: {
+        const GrallocPixelFormat format = static_cast<GrallocPixelFormat>(hnd->format);
+        return copy_value(&format, sizeof(format));
+      }
+      case SnapMetadataType::IS_UBWC: {
+        const int64_t is_ubwc =
+            (hnd->flags & (qtigralloc::PRIV_FLAGS_UBWC_ALIGNED |
+                           qtigralloc::PRIV_FLAGS_UBWC_ALIGNED_PI)) != 0;
+        return copy_value(&is_ubwc, sizeof(is_ubwc));
+      }
+      case SnapMetadataType::IS_TILE_RENDERED: {
+        const int64_t is_tile_rendered =
+            (hnd->flags & qtigralloc::PRIV_FLAGS_TILE_RENDERED) != 0;
+        return copy_value(&is_tile_rendered, sizeof(is_tile_rendered));
+      }
+      case SnapMetadataType::IS_CACHED: {
+        const int64_t is_cached = (hnd->flags & qtigralloc::PRIV_FLAGS_CACHED) != 0;
+        return copy_value(&is_cached, sizeof(is_cached));
+      }
+      case SnapMetadataType::BASE_ADDRESS: {
+        const uint64_t base_address = hnd->base;
+        return copy_value(&base_address, sizeof(base_address));
+      }
+      default:
+        break;
+    }
+
+    // The metadata below retains the same numeric identifier and POD layout in
+    // the legacy gralloc implementation. Keep this list explicit so new Snap
+    // identifiers cannot accidentally alias standard metadata handlers.
+    switch (metadataType) {
+      case QTI_VT_TIMESTAMP:
+      case QTI_PP_PARAM_INTERLACED:
+      case QTI_VIDEO_PERF_MODE:
+      case QTI_UBWC_CR_STATS_INFO:
+      case QTI_REFRESH_RATE:
+      case QTI_MAP_SECURE_BUFFER:
+      case QTI_LINEAR_FORMAT:
+      case QTI_SINGLE_BUFFER_MODE:
+      case QTI_CVP_METADATA:
+      case QTI_VIDEO_HISTOGRAM_STATS:
+      case QTI_VIDEO_TS_INFO:
+      case QTI_CUSTOM_DIMENSIONS_STRIDE:
+      case QTI_CUSTOM_DIMENSIONS_HEIGHT:
+#ifdef QTI_MEM_HANDLE
+      case QTI_MEM_HANDLE:
+#endif
+      case QTI_CUSTOM_CONTENT_METADATA:
+#ifdef QTI_VIDEO_TRANSCODE_STATS
+      case QTI_VIDEO_TRANSCODE_STATS:
+#endif
+      case QTI_COLOR_METADATA:
+      case QTI_PRIVATE_FLAGS:
+      case QTI_COLORSPACE:
+      case QTI_YUV_PLANE_INFO: {
+        auto size = type_to_size_.find(static_cast<uint64_t>(metadataType));
+        if (size == type_to_size_.end()) {
+          return -AIMAPPER_ERROR_UNSUPPORTED;
+        }
+        const size_t expected_size = size->second;
+        if (outData == nullptr || outDataSize < expected_size) {
+          return static_cast<int32_t>(expected_size);
+        }
+
+        auto error = buf_mgr_->GetMetadataValue(const_cast<private_handle_t *>(hnd), metadataType,
+                                                 outData);
+        if (error == gralloc::Error::NONE) {
+          return static_cast<int32_t>(expected_size);
+        }
+
+        if (error == gralloc::Error::BAD_VALUE) {
+          auto metadata = reinterpret_cast<MetaData_t *>(hnd->base_metadata);
+          if (!metadata || !gralloc::getGralloc4Array(metadata, metadataType)) {
+            return -AIMAPPER_ERROR_UNSUPPORTED;
+          }
+        }
+
+        if (error == gralloc::Error::BAD_BUFFER) {
+          // IsBufferImported() was already checked before entering this
+          // whitelist. A still-imported handle without a mapped legacy
+          // metadata region cannot provide optional per-buffer metadata, but
+          // the native handle itself remains valid. Preserve BAD_BUFFER for
+          // real parsing failures and release races.
+          if (hnd->base_metadata == 0 &&
+              buf_mgr_->IsBufferImported(hnd) == gralloc::Error::NONE) {
+            return -AIMAPPER_ERROR_UNSUPPORTED;
+          }
+
+          return -AIMAPPER_ERROR_BAD_BUFFER;
+        }
+
+        return -static_cast<int32_t>(error);
+      }
+      default:
+        return -AIMAPPER_ERROR_UNSUPPORTED;
+    }
+  }
+
   return (buf_mgr_->GetMetadata(const_cast<private_handle_t *>(hnd), metadataType, outData,
                                 outDataSize));
 }
@@ -685,13 +845,9 @@ int32_t QtiMapper5Legacy::getMetadata(buffer_handle_t _Nonnull buffer,
   if (isStandardMetadata(metadataType)) {
     return getStandardMetadata(buffer, metadataType.value, outData, outDataSize);
   } else if (isVendorMetadata(metadataType)) {
-    auto expected_size =
-        (type_to_size_.find(static_cast<uint64_t>(metadataType.value)) != type_to_size_.end())
-            ? type_to_size_.at(metadataType.value)
-            : outDataSize;
-    ALOGD_IF(enable_logs, "%s: Buffer: %p MetadataType(vendor): %" PRId64 " ExpectedSize: %zu",
-             __FUNCTION__, buffer, metadataType.value, expected_size);
-    return (GetMetadataPrivate(buffer, metadataType.value, outData, outDataSize, false));
+    ALOGD_IF(enable_logs, "%s: Buffer: %p MetadataType(vendor): %" PRId64 " OutputSize: %zu",
+             __FUNCTION__, buffer, metadataType.value, outDataSize);
+    return GetMetadataPrivate(buffer, metadataType.value, outData, outDataSize, false);
   }
   return -AIMAPPER_ERROR_UNSUPPORTED;
 }
@@ -739,7 +895,8 @@ Error QtiMapper5Legacy::setStandardMetadata(buffer_handle_t _Nonnull bufferHandl
 Error QtiMapper5Legacy::listSupportedMetadataTypes(
     const AIMapper_MetadataTypeDescription *_Nullable *_Nonnull outDescriptionList,
     size_t *_Nonnull outNumberOfDescriptions) {
-  static constexpr std::array<AIMapper_MetadataTypeDescription, 62> sSupportedMetadaTypes{
+  static const std::vector<AIMapper_MetadataTypeDescription> sSupportedMetadataTypes{
+      // Standard metadata continues to use the legacy gralloc4 encoded stream.
       describeStandard(StandardMetadataType::BUFFER_ID, true, false),
       describeStandard(StandardMetadataType::NAME, true, false),
       describeStandard(StandardMetadataType::WIDTH, true, false),
@@ -757,69 +914,58 @@ Error QtiMapper5Legacy::listSupportedMetadataTypes(
       describeStandard(StandardMetadataType::PLANE_LAYOUTS, true, false),
       describeStandard(StandardMetadataType::CROP, true, true),
       describeStandard(StandardMetadataType::DATASPACE, true, true),
-      describeStandard(StandardMetadataType::COMPRESSION, true, false),
       describeStandard(StandardMetadataType::BLEND_MODE, true, true),
       describeStandard(StandardMetadataType::SMPTE2086, true, true),
       describeStandard(StandardMetadataType::CTA861_3, true, true),
       describeStandard(StandardMetadataType::SMPTE2094_40, true, true),
-      // TODO: Investigate if this can be supported
-      // describeStandard(StandardMetadataType::SMPTE2094_10, true, true),
       describeStandard(StandardMetadataType::STRIDE, true, false),
-      describeQTI(SnapMetadataType::VT_TIMESTAMP, "VT Timestamp", true, true),
-      describeQTI(SnapMetadataType::MATRIX_COEFFICIENTS, "Color metadata - Matrix coefficients",
-                  true, true),
-      describeQTI(SnapMetadataType::MASTERING_DISPLAY, "Color metadata - Mastering display", true,
-                  true),
-      describeQTI(SnapMetadataType::CONTENT_LIGHT_LEVEL, "Color metadata - Content light level",
-                  true, true),
-      describeQTI(SnapMetadataType::COLOR_REMAPPING_INFO, "Color metadata - Color remapping info",
-                  true, true),
-      describeQTI(SnapMetadataType::DYNAMIC_METADATA, "Color metadata - Dynamic metadata", true,
-                  true),
-      describeQTI(SnapMetadataType::PP_PARAM_INTERLACED, "Interlaced", true, true),
-      describeQTI(SnapMetadataType::VIDEO_PERF_MODE, "Video perf mode", true, true),
-      describeQTI(SnapMetadataType::GRAPHICS_METADATA, "Graphics metadata", true, true),
-      describeQTI(SnapMetadataType::UBWC_CR_STATS_INFO, "UBWC stats", true, true),
-      describeQTI(SnapMetadataType::REFRESH_RATE, "Refresh rate", true, true),
-      describeQTI(SnapMetadataType::MAP_SECURE_BUFFER, "Secure buffer mappable", true, true),
-      describeQTI(SnapMetadataType::LINEAR_FORMAT, "Linear format", true, true),
-      describeQTI(SnapMetadataType::SINGLE_BUFFER_MODE, "Single buffer mode flag", true, true),
-      describeQTI(SnapMetadataType::CVP_METADATA, "CVP metadata", true, true),
-      describeQTI(SnapMetadataType::VIDEO_HISTOGRAM_STATS, "Video histogram stats", true, true),
-      describeQTI(SnapMetadataType::VIDEO_TRANSCODE_STATS, "Video transcode stats", true, true),
-      describeQTI(SnapMetadataType::FD, "FD in internal handle", true, false),
+
+      // Values derived directly from private_handle_t.
+      describeQTI(SnapMetadataType::BUFFER_ID, "Buffer ID", true, false),
+      describeQTI(SnapMetadataType::WIDTH, "Requested width", true, false),
+      describeQTI(SnapMetadataType::HEIGHT, "Requested height", true, false),
+      describeQTI(SnapMetadataType::USAGE, "Buffer usage", true, false),
+      describeQTI(SnapMetadataType::ALLOCATION_SIZE, "Allocation size", true, false),
+      describeQTI(SnapMetadataType::STRIDE, "Buffer stride", true, false),
+      describeQTI(SnapMetadataType::FD, "Buffer file descriptor", true, false),
+      describeQTI(SnapMetadataType::ALIGNED_WIDTH_IN_PIXELS, "Aligned width", true, false),
+      describeQTI(SnapMetadataType::ALIGNED_HEIGHT_IN_PIXELS, "Aligned height", true, false),
+      describeQTI(SnapMetadataType::BUFFER_TYPE, "Buffer type", true, false),
+      describeQTI(SnapMetadataType::BASE_ADDRESS, "Buffer base address", true, false),
       describeQTI(SnapMetadataType::IS_UBWC, "UBWC flag", true, false),
-      describeQTI(SnapMetadataType::IS_TILE_RENDERED, "Tile rendered flag", true, false),
+      describeQTI(SnapMetadataType::IS_TILE_RENDERED, "Tile-rendered flag", true, false),
       describeQTI(SnapMetadataType::IS_CACHED, "Cached flag", true, false),
-      describeQTI(SnapMetadataType::ALIGNED_WIDTH_IN_PIXELS, "width in internal handle", true,
-                  false),
-      describeQTI(SnapMetadataType::ALIGNED_HEIGHT_IN_PIXELS, "height in internal handle", true,
-                  false),
-      describeQTI(SnapMetadataType::STANDARD_METADATA_STATUS, "Is standard metadata set", true,
-                  false),
-      describeQTI(SnapMetadataType::VENDOR_METADATA_STATUS, "Is vendor metadata set", true, false),
-      describeQTI(SnapMetadataType::BUFFER_TYPE, "Buffer type from internal handle", true, false),
-      describeQTI(SnapMetadataType::VIDEO_TS_INFO, "Video timestamp info", true, true),
-      describeQTI(SnapMetadataType::CUSTOM_DIMENSIONS_STRIDE,
-                  "Custom (factors in crop/interlaced height) width", true, false),
-      describeQTI(SnapMetadataType::CUSTOM_DIMENSIONS_HEIGHT,
-                  "Custom (factors in crop/interlaced height) height", true, false),
-      describeQTI(SnapMetadataType::RGB_DATA_ADDRESS,
-                  "RGB data address, factors in offset for UBWC buffer", true, false),
-      describeQTI(SnapMetadataType::BUFFER_PERMISSION, "BufferPermission", true, true),
-      describeQTI(SnapMetadataType::MEM_HANDLE, "MemHandle", true, false),
-      describeQTI(SnapMetadataType::TIMED_RENDERING, "timed rendering", true, true),
-      describeQTI(SnapMetadataType::CUSTOM_CONTENT_METADATA, "Custom content metadata", true, true),
-      describeQTI(SnapMetadataType::EARLYNOTIFY_LINECOUNT,
-                  "Early notify line count - used by video", true, true),
-      describeQTI(SnapMetadataType::HEAP_NAME, "Heap name", true, false),
-      describeQTI(SnapMetadataType::BASE_ADDRESS, "Buffer data base address", true, false),
-      describeQTI(SnapMetadataType::PIXEL_FORMAT_ALLOCATED, "Format Post allocation", true, false),
-      describeQTI(SnapMetadataType::BUFFER_DEQUEUE_DURATION, "Last buffer dequeue duration", true,
-                  true),
+      describeQTI(SnapMetadataType::PIXEL_FORMAT_ALLOCATED, "Allocated pixel format", true, false),
+
+      // Legacy QTI metadata with an explicitly verified POD layout. Vendor
+      // setters remain unadvertised until native-to-gralloc4 encoding exists.
+      describeQTI(QTI_VT_TIMESTAMP, "VT timestamp", true, false),
+      describeQTI(QTI_COLOR_METADATA, "Legacy color metadata", true, false),
+      describeQTI(QTI_PP_PARAM_INTERLACED, "Interlaced flag", true, false),
+      describeQTI(QTI_VIDEO_PERF_MODE, "Video performance mode", true, false),
+      describeQTI(QTI_UBWC_CR_STATS_INFO, "UBWC statistics", true, false),
+      describeQTI(QTI_REFRESH_RATE, "Refresh rate", true, false),
+      describeQTI(QTI_MAP_SECURE_BUFFER, "Secure-buffer mapping", true, false),
+      describeQTI(QTI_LINEAR_FORMAT, "Linear format", true, false),
+      describeQTI(QTI_SINGLE_BUFFER_MODE, "Single-buffer mode", true, false),
+      describeQTI(QTI_CVP_METADATA, "CVP metadata", true, false),
+      describeQTI(QTI_VIDEO_HISTOGRAM_STATS, "Video histogram", true, false),
+      describeQTI(QTI_PRIVATE_FLAGS, "Private flags", true, false),
+      describeQTI(QTI_VIDEO_TS_INFO, "Video timestamp information", true, false),
+      describeQTI(QTI_CUSTOM_DIMENSIONS_STRIDE, "Custom dimensions stride", true, false),
+      describeQTI(QTI_CUSTOM_DIMENSIONS_HEIGHT, "Custom dimensions height", true, false),
+      describeQTI(QTI_COLORSPACE, "Legacy colorspace", true, false),
+      describeQTI(QTI_YUV_PLANE_INFO, "YUV plane information", true, false),
+#ifdef QTI_MEM_HANDLE
+      describeQTI(QTI_MEM_HANDLE, "Memory handle", true, false),
+#endif
+      describeQTI(QTI_CUSTOM_CONTENT_METADATA, "Custom content metadata", true, false),
+#ifdef QTI_VIDEO_TRANSCODE_STATS
+      describeQTI(QTI_VIDEO_TRANSCODE_STATS, "Video transcode statistics", true, false),
+#endif
   };
-  *outDescriptionList = sSupportedMetadaTypes.data();
-  *outNumberOfDescriptions = sSupportedMetadaTypes.size();
+  *outDescriptionList = sSupportedMetadataTypes.data();
+  *outNumberOfDescriptions = sSupportedMetadataTypes.size();
   return AIMAPPER_ERROR_NONE;
 }
 
