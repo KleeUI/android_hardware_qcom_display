@@ -29,6 +29,7 @@
 #include <QtiGrallocDefs.h>
 #include <gralloctypes/Gralloc4.h>
 #include <sys/mman.h>
+#include <unistd.h>
 
 #include <algorithm>
 #include <iomanip>
@@ -695,7 +696,11 @@ Error BufferManager::AllocateBuffer(const BufferDescriptor &descriptor, buffer_h
                           data.size, usage);
 
   hnd->reserved_size = static_cast<unsigned int>(descriptor.GetReservedSize());
-  hnd->id = ++next_id_;
+  // The AIDL and legacy HIDL allocators run in separate processes but both use
+  // this BufferManager. Namespace the sequence by PID so their buffer IDs do
+  // not collide when handles meet again in Mapper or Composer.
+  hnd->id = (static_cast<uint64_t>(static_cast<uint32_t>(getpid())) << 32) |
+            static_cast<uint64_t>(++next_id_);
   hnd->base = 0;
   hnd->base_metadata = 0;
   hnd->layer_count = layer_count;
