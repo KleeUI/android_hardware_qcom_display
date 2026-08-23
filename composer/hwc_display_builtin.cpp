@@ -516,6 +516,10 @@ HWC3::Error HWCDisplayBuiltIn::SetColorModeFromClientApi(int32_t color_mode_id) 
 
 HWC3::Error HWCDisplayBuiltIn::RestoreColorTransform() {
   auto status = color_mode_->RestoreColorTransform();
+  if (status == HWC3::Error::Unsupported) {
+    DLOGW("Color transform is not supported; preserving the client-composition fallback");
+    return HWC3::Error::None;
+  }
   if (status != HWC3::Error::None) {
     DLOGE("failed to RestoreColorTransform");
     return status;
@@ -533,6 +537,15 @@ HWC3::Error HWCDisplayBuiltIn::SetColorTransform(const float *matrix,
   }
 
   auto status = color_mode_->SetColorTransform(matrix, hint);
+  if (status == HWC3::Error::Unsupported) {
+    // Composer3 requires an unsupported transform to fall back to client composition instead of
+    // rejecting the entire display command.  An identity transform needs no fallback at all.
+    color_tranform_failed_ = (hint != HAL_COLOR_TRANSFORM_IDENTITY);
+    callbacks_->Refresh(id_);
+    DLOGW("Color transform is not supported; using %s composition",
+          color_tranform_failed_ ? "client" : "normal");
+    return HWC3::Error::None;
+  }
   if (status != HWC3::Error::None) {
     DLOGE("failed for hint = %d", hint);
     color_tranform_failed_ = true;
