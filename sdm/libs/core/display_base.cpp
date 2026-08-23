@@ -3289,7 +3289,33 @@ void DisplayBase::UpdateFrameBuffer() {
 }
 
 void DisplayBase::PostCommitLayerParams() {
-  cached_qos_data_ = disp_layer_stack_->info.qos_data;
+  HWLayersInfo &info = disp_layer_stack_->info;
+  LayerStack *layer_stack = disp_layer_stack_->stack;
+
+  if (layer_stack) {
+    layer_stack->retire_fence = info.retire_fence;
+
+    std::vector<uint32_t> fence_dup_flag = {};
+    const uint32_t hw_layers_count = UINT32(info.hw_layers.size());
+
+    for (uint32_t i = 0; i < hw_layers_count; i++) {
+      const uint32_t sdm_layer_index = info.index.at(i);
+      Layer *sdm_layer = layer_stack->layers.at(sdm_layer_index);
+      Layer &hw_layer = info.hw_layers.at(i);
+
+      if (std::find(fence_dup_flag.begin(), fence_dup_flag.end(), sdm_layer_index) ==
+          fence_dup_flag.end()) {
+        sdm_layer->input_buffer.release_fence = hw_layer.input_buffer.release_fence;
+        fence_dup_flag.push_back(sdm_layer_index);
+      } else {
+        sdm_layer->input_buffer.release_fence =
+            Fence::Merge(hw_layer.input_buffer.release_fence,
+                         sdm_layer->input_buffer.release_fence);
+      }
+    }
+  }
+
+  cached_qos_data_ = info.qos_data;
 }
 
 DisplayError DisplayBase::InitializeColorModes() {
