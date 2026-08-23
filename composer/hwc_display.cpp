@@ -328,6 +328,9 @@ HWC3::Error HWCColorMode::SetColorModeFromClientApi(std::string mode_string) {
 
 HWC3::Error HWCColorMode::RestoreColorTransform() {
   DisplayError error = display_intf_->SetColorTransform(kColorTransformMatrixCount, color_matrix_);
+  if (error == kErrorNotSupported) {
+    return HWC3::Error::Unsupported;
+  }
   if (error != kErrorNone) {
     DLOGE("Failed to set Color Transform");
     return HWC3::Error::BadParameter;
