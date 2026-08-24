@@ -33,6 +33,7 @@
 
 #include <algorithm>
 #include <iomanip>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <utility>
@@ -322,8 +323,10 @@ Error BufferManager::ValidateBufferSize(private_handle_t const *hnd, BufferInfo 
   if ((ret < 0) || (OVERFLOW((alignedw * max_bpp), alignedh))) {
     return Error::BAD_BUFFER;
   }
-  auto ion_fd_size = static_cast<unsigned int>(lseek(hnd->fd, 0, SEEK_END));
-  if (size != ion_fd_size) {
+  const off_t ion_fd_size = lseek(hnd->fd, 0, SEEK_END);
+  if (ion_fd_size < 0 ||
+      static_cast<uint64_t>(ion_fd_size) > std::numeric_limits<unsigned int>::max() ||
+      size != static_cast<unsigned int>(ion_fd_size)) {
     return Error::BAD_VALUE;
   }
   return Error::NONE;
@@ -365,6 +368,13 @@ Error BufferManager::ImportHandleLocked(private_handle_t *hnd) {
     return Error::BAD_BUFFER;
   }
   ALOGD_IF(enable_logs, "Importing handle:%p id: %" PRIu64, hnd, hnd->id);
+  const off_t ion_fd_size = lseek(hnd->fd, 0, SEEK_END);
+  if (ion_fd_size < 0 ||
+      static_cast<uint64_t>(ion_fd_size) > std::numeric_limits<unsigned int>::max()) {
+    ALOGE("Failed to determine ion buffer size: hnd: %p, fd:%d, id:%" PRIu64, hnd, hnd->fd,
+          hnd->id);
+    return Error::BAD_BUFFER;
+  }
   int ion_handle = allocator_->ImportBuffer(hnd->fd);
   if (ion_handle < 0) {
     ALOGE("Failed to import ion buffer: hnd: %p, fd:%d, id:%" PRIu64, hnd, hnd->fd, hnd->id);
@@ -377,7 +387,7 @@ Error BufferManager::ImportHandleLocked(private_handle_t *hnd) {
     return Error::BAD_BUFFER;
   }
   // Initialize members that aren't transported
-  hnd->size = static_cast<unsigned int>(lseek(hnd->fd, 0, SEEK_END));
+  hnd->size = static_cast<unsigned int>(ion_fd_size);
   hnd->offset = 0;
   hnd->offset_metadata = 0;
   hnd->base = 0;
@@ -1027,11 +1037,7 @@ Error BufferManager::GetMetadata(private_handle_t *handle, int64_t metadatatype_
       }
       break;
     case (int64_t)StandardMetadataType::ALLOCATION_SIZE:
-      if (metadata_ptr != nullptr) {
-        android::gralloc4::encodeAllocationSize(*reinterpret_cast<uint64_t *>(metadata_ptr), out);
-      } else {
-        return Error::BAD_VALUE;
-      }
+      android::gralloc4::encodeAllocationSize(static_cast<uint64_t>(handle->size), out);
       break;
     case (int64_t)StandardMetadataType::PROTECTED_CONTENT: {
       // update to use metadata ptr when implemented
